@@ -6,12 +6,13 @@ same request is retried on the fallback.
 """
 
 import sys
+from collections.abc import Sequence
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.runnables import Runnable
-from langchain_openai import ChatOpenAI
-from collections.abc import Sequence
 from langchain_core.tools import BaseTool
+from langchain_openai import ChatOpenAI
+
 from fuse.config import LLMProvider, Settings, get_settings
 
 
