@@ -16,6 +16,8 @@ class Settings(BaseSettings):
 
     # Secrets use SecretStr: printing or logging the settings shows ********** instead.
     telegram_bot_token: SecretStr = SecretStr("")
+    # Only this Telegram chat may talk to Fuse. 0 means "not set": nobody gets in.
+    telegram_allowed_chat_id: int = 0
     database_url: SecretStr = SecretStr("postgresql://fuse:fuse@localhost:55432/fuse")
 
 
