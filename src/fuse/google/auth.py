@@ -22,10 +22,13 @@ from fuse.db import open_pool
 
 log = logging.getLogger("fuse.google")
 
-# Read-only for now. Step 10C adds permission to create drafts. Never permission to send.
+# What Fuse may do with your Google account.
+# gmail.compose is Google's narrowest permission that allows creating drafts. It would also
+# allow sending, but Fuse has no send tool, and every draft needs your Approve first.
 SCOPES = [
     "https://www.googleapis.com/auth/gmail.readonly",
     "https://www.googleapis.com/auth/calendar.readonly",
+    "https://www.googleapis.com/auth/gmail.compose",
 ]
 PROVIDER = "google"
 SIGN_IN_HINT = "Google is not connected. Run: uv run python -m fuse.google.auth"
@@ -89,7 +92,12 @@ async def get_credentials(store: TokenStore, provider: str = PROVIDER) -> Creden
     if token_json is None:
         raise GoogleNotConnected(SIGN_IN_HINT)
 
-    creds = Credentials.from_authorized_user_info(json.loads(token_json), SCOPES)
+    info = json.loads(token_json)
+    missing = set(SCOPES) - set(info.get("scopes") or [])
+    if missing:  # signed in before Fuse needed these permissions
+        raise GoogleNotConnected(f"Fuse needs updated Google permissions. {SIGN_IN_HINT}")
+
+    creds = Credentials.from_authorized_user_info(info)
     if creds.valid:
         return creds
     if not creds.refresh_token:

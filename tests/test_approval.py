@@ -7,7 +7,7 @@ from fuse.actions import InMemoryActionStore
 from fuse.agent.graph import build_graph
 from fuse.agent.runner import AgentRunner
 from fuse.tools.basic import make_basic_tools
-from fuse.tools.drafts import LocalDraftSink, make_draft_tools
+from fuse.tools.drafts import DraftError, LocalDraftSink, make_draft_tools
 from tests.conftest import ScriptedModel, tool_call
 
 DRAFT = {"to": "pat@example.com", "subject": "Re: Proposal", "body": "Friday works."}
@@ -71,3 +71,24 @@ async def test_read_tools_never_ask_for_approval():
     )
     reply = await runner.send("t1", "What time is it?")
     assert reply.kind == "text"
+
+
+class FailingSink:
+    async def save_draft(self, to, subject, body):
+        raise DraftError("Google is not connected. Run: uv run python -m fuse.google.auth")
+
+
+async def test_a_failed_draft_is_reported_and_recorded():
+    store = InMemoryActionStore()
+    model = ScriptedModel(
+        script=[tool_call("draft_email_reply", DRAFT), AIMessage(content="Sorry, that failed.")]
+    )
+    runner = AgentRunner(
+        build_graph(model, make_draft_tools(store, FailingSink()), InMemorySaver())
+    )
+    key = (await runner.send("t1", "Reply to Pat")).approval["action_key"]
+
+    reply = await runner.resume("t1", approved=True)
+    assert reply.text == "Sorry, that failed."
+    assert "could not be saved" in model.calls[-1][-1].content  # the model was told why
+    assert (await store.get(key)).status == "failed"

@@ -10,7 +10,7 @@ from google.oauth2.credentials import Credentials
 
 from fuse.crypto import SecretBox
 from fuse.db import open_pool
-from fuse.google.auth import GoogleNotConnected, TokenStore, get_credentials
+from fuse.google.auth import SCOPES, GoogleNotConnected, TokenStore, get_credentials
 
 # Tests use their own row, so they can never overwrite your real Google sign-in ("google").
 TEST_PROVIDER = "test-google"
@@ -18,7 +18,7 @@ TEST_PROVIDER = "test-google"
 DB_URL = os.environ.get("TEST_DATABASE_URL")
 
 
-def fake_token(expiry: str) -> str:
+def fake_token(expiry: str, scopes: list[str] = SCOPES) -> str:
     return json.dumps(
         {
             "token": "ya29.fake-access-token",
@@ -26,6 +26,7 @@ def fake_token(expiry: str) -> str:
             "client_id": "fake.apps.googleusercontent.com",
             "client_secret": "fake-secret",
             "token_uri": "https://oauth2.googleapis.com/token",
+            "scopes": scopes,
             "expiry": expiry,
         }
     )
@@ -56,6 +57,13 @@ async def test_wrong_encryption_key_says_how_to_fix_it():
 
     with pytest.raises(GoogleNotConnected, match="ENCRYPTION_KEY"):
         await get_credentials(UndecryptableStore(None))
+
+
+async def test_old_sign_in_without_new_permissions_asks_to_sign_in_again():
+    read_only = [s for s in SCOPES if "compose" not in s]
+    store = FakeStore(fake_token(expiry="2999-01-01T00:00:00Z", scopes=read_only))
+    with pytest.raises(GoogleNotConnected, match="updated Google permissions"):
+        await get_credentials(store)
 
 
 async def test_expired_sign_in_says_how_to_fix_it(monkeypatch):

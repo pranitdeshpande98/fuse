@@ -1,7 +1,7 @@
-"""Write tool: draft an email reply. Always goes through the approval gate.
+"""Write tool: draft an email. Always goes through the approval gate.
 
-For now drafts are kept locally. Step 10 (Google) replaces LocalDraftSink with one that
-saves to your real Gmail drafts.
+Where the draft goes is up to the DraftSink: your Gmail drafts folder when Google is
+connected (fuse.google.drafts), or a local list otherwise. Drafts are never sent.
 """
 
 from typing import Annotated, Protocol
@@ -11,6 +11,10 @@ from langchain_core.tools import BaseTool, InjectedToolCallId, tool
 
 from fuse.actions import ActionStore
 from fuse.tools.approval import require_approval
+
+
+class DraftError(Exception):
+    """A draft couldn't be saved. The message is safe to show the user."""
 
 
 class DraftSink(Protocol):
@@ -42,14 +46,18 @@ def make_draft_tools(store: ActionStore, sink: DraftSink) -> list[BaseTool]:
         Only address people the user named or who are already in the email thread.
         """
         thread_id = str(config["configurable"]["thread_id"])
-        return await require_approval(
-            store=store,
-            thread_id=thread_id,
-            tool_call_id=tool_call_id,
-            tool_name="draft_email_reply",
-            args={"to": to, "subject": subject, "body": body},
-            preview=f"To: {to}\nSubject: {subject}\n\n{body}",
-            run=lambda: sink.save_draft(to, subject, body),
-        )
+        try:
+            return await require_approval(
+                store=store,
+                thread_id=thread_id,
+                tool_call_id=tool_call_id,
+                tool_name="draft_email_reply",
+                args={"to": to, "subject": subject, "body": body},
+                preview=f"To: {to}\nSubject: {subject}\n\n{body}",
+                run=lambda: sink.save_draft(to, subject, body),
+            )
+        except DraftError as exc:
+            # The action is recorded as "failed"; asking again will ask for approval again.
+            return f"The draft could not be saved: {exc}"
 
     return [draft_email_reply]

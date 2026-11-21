@@ -24,12 +24,13 @@ from fuse.config import Settings, get_settings
 from fuse.crypto import SecretBox
 from fuse.db import open_pool
 from fuse.google.auth import TokenStore
+from fuse.google.drafts import GmailDraftSink
 from fuse.google.reader import GoogleApiReader, GoogleReader
 from fuse.google.tools import make_google_tools
 from fuse.llm import build_llm
 from fuse.logging_setup import configure_logging
 from fuse.tools.basic import make_basic_tools
-from fuse.tools.drafts import LocalDraftSink, make_draft_tools
+from fuse.tools.drafts import DraftSink, LocalDraftSink, make_draft_tools
 
 log = logging.getLogger("fuse.telegram")
 
@@ -46,11 +47,12 @@ def build_runner(
     checkpointer: BaseCheckpointSaver,
     actions: ActionStore,
     google: GoogleReader | None = None,
+    drafts: DraftSink | None = None,
 ) -> AgentRunner:
     tools = [
         *make_basic_tools(settings.user_timezone),
         *(make_google_tools(google) if google else []),
-        *make_draft_tools(actions, LocalDraftSink()),
+        *make_draft_tools(actions, drafts or LocalDraftSink()),
     ]
     model = build_llm(settings, tools)
     graph = build_graph(model, tools, checkpointer)
@@ -141,15 +143,16 @@ def build_application(settings: Settings) -> Application:
         actions = PostgresActionStore(pool)
         await actions.ensure_schema()  # creates the actions table on first run
 
-        google = None
+        google, drafts = None, None
         if settings.encryption_key.get_secret_value():
             tokens = TokenStore(pool, SecretBox(settings.encryption_key.get_secret_value()))
             await tokens.ensure_schema()
             google = GoogleApiReader(tokens)
+            drafts = GmailDraftSink(tokens)
         else:
             log.warning("ENCRYPTION_KEY not set: Gmail and Calendar tools are disabled")
 
-        app.bot_data["runner"] = build_runner(settings, checkpointer, actions, google)
+        app.bot_data["runner"] = build_runner(settings, checkpointer, actions, google, drafts)
         app.bot_data["settings"] = settings
         log.info("Agent ready; conversations are stored in Postgres")
 
