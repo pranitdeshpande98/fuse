@@ -1,0 +1,24 @@
+"""Settings, loaded from environment variables and a local .env file."""
+
+from functools import lru_cache
+from typing import Literal
+
+from pydantic import SecretStr
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+
+    app_env: Literal["dev", "test", "prod"] = "dev"
+    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
+    user_timezone: str = "America/Chicago"
+
+    # Secrets use SecretStr: printing or logging the settings shows ********** instead.
+    telegram_bot_token: SecretStr = SecretStr("")
+
+
+@lru_cache
+def get_settings() -> Settings:
+    """Build the settings once and reuse them everywhere."""
+    return Settings()
