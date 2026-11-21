@@ -39,6 +39,10 @@ class Settings(BaseSettings):
 
     llm_timeout_seconds: float = 60.0
     # Max model + tool steps in one turn, so a looping model cannot burn the free quota.
+    # Google sign-in (step 10)
+    google_client_secrets_file: str = "credentials.json"
+    # Encrypts stored Google tokens. Generate once (see .env.example) and never change it.
+    encryption_key: SecretStr = SecretStr("")
     agent_max_steps: int = 12
 
     def llm_providers(self) -> list[LLMProvider]:
