@@ -30,7 +30,12 @@ class AgentRunner:
 
     def _config(self, thread_id: str) -> dict[str, Any]:
         # thread_id keeps conversations apart; recursion_limit is the per-turn step budget.
-        return {"configurable": {"thread_id": thread_id}, "recursion_limit": self._max_steps}
+        return {
+            "configurable": {"thread_id": thread_id},
+            "recursion_limit": self._max_steps,
+            "run_name": "fuse-turn",  # how each turn is named in traces
+            "metadata": {"thread_id": thread_id},  # lets LangSmith group turns by conversation
+        }
 
     async def pending_approval(self, thread_id: str) -> dict[str, Any] | None:
         """The approval this thread is paused on, if any. Read from the checkpoint."""

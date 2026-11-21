@@ -31,6 +31,7 @@ from fuse.llm import build_llm
 from fuse.logging_setup import configure_logging
 from fuse.tools.basic import make_basic_tools
 from fuse.tools.drafts import DraftSink, LocalDraftSink, make_draft_tools
+from fuse.tracing import enable_tracing
 
 log = logging.getLogger("fuse.telegram")
 
@@ -176,6 +177,7 @@ def main() -> None:
     use_selector_event_loop_on_windows()
     settings = get_settings()
     configure_logging(settings.log_level)
+    enable_tracing(settings)
     if not settings.telegram_bot_token.get_secret_value():
         raise SystemExit("Set TELEGRAM_BOT_TOKEN in .env")
     if settings.telegram_allowed_chat_id == 0:
