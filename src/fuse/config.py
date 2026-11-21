@@ -38,6 +38,8 @@ class Settings(BaseSettings):
     llm_fallback_model: str = "gpt-oss-120b"
 
     llm_timeout_seconds: float = 60.0
+    # Max model + tool steps in one turn, so a looping model cannot burn the free quota.
+    agent_max_steps: int = 12
 
     def llm_providers(self) -> list[LLMProvider]:
         """Configured providers in priority order. A provider without an API key is skipped."""

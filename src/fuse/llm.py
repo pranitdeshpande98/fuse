@@ -10,7 +10,8 @@ import sys
 from langchain_core.language_models import BaseChatModel
 from langchain_core.runnables import Runnable
 from langchain_openai import ChatOpenAI
-
+from collections.abc import Sequence
+from langchain_core.tools import BaseTool
 from fuse.config import LLMProvider, Settings, get_settings
 
 
@@ -25,12 +26,18 @@ def build_chat_model(provider: LLMProvider, timeout: float) -> BaseChatModel:
     )
 
 
-def build_llm(settings: Settings) -> Runnable:
-    """The primary model, falling back to the next configured provider on any error."""
+def build_llm(settings: Settings, tools: Sequence[BaseTool] = ()) -> Runnable:
+    """The primary model, falling back to the next configured provider on any error.
+
+    Tools are bound to each model before the fallback chain is built, so a fallback model
+    can call the same tools as the primary.
+    """
     providers = settings.llm_providers()
     if not providers:
         raise RuntimeError("No LLM provider configured: set LLM_PRIMARY_API_KEY in .env")
     models = [build_chat_model(p, settings.llm_timeout_seconds) for p in providers]
+    if tools:
+        models = [m.bind_tools(list(tools)) for m in models]
     primary, *fallbacks = models
     return primary.with_fallbacks(fallbacks) if fallbacks else primary
 
