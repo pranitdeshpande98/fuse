@@ -15,14 +15,15 @@ def make_runner(script: list[AIMessage], max_steps: int = 12) -> tuple[AgentRunn
 
 async def test_plain_answer():
     runner, _ = make_runner([AIMessage(content="Hello!")])
-    assert await runner.send("t1", "hi") == "Hello!"
+    assert (await runner.send("t1", "hi")).text == "Hello!"
 
 
 async def test_tool_is_called_and_result_goes_back_to_the_model():
     runner, model = make_runner(
         [tool_call("get_current_time", {"timezone": "UTC"}), AIMessage(content="It's noon.")]
     )
-    assert await runner.send("t1", "what time is it?") == "It's noon."
+
+    assert (await runner.send("t1", "what time is it?")).text == "It's noon."
     tool_result = model.calls[1][-1]  # the last message the model saw on its second call
     assert tool_result.type == "tool"
     assert "UTC" in tool_result.content
@@ -49,4 +50,5 @@ async def test_threads_are_kept_separate():
 async def test_step_budget_stops_a_looping_model():
     looping = [tool_call("get_current_time", {}, call_id=f"c{i}") for i in range(50)]
     runner, _ = make_runner(looping, max_steps=4)
-    assert "step limit" in await runner.send("t1", "loop forever")
+
+    assert "step limit" in (await runner.send("t1", "loop forever")).text

@@ -1,4 +1,4 @@
-from telegram.ext import MessageHandler
+from telegram.ext import CallbackQueryHandler, MessageHandler
 
 from fuse.channels.telegram_bot import build_application, is_allowed
 from fuse.config import Settings
@@ -15,10 +15,11 @@ def test_unset_allowed_chat_lets_nobody_in():
     assert not is_allowed(42, 0)
 
 
-def test_handler_is_locked_to_the_allowed_chat():
+def test_handlers_are_registered():
     settings = Settings(_env_file=None, telegram_bot_token="123:fake", telegram_allowed_chat_id=42)
     app = build_application(settings)  # builds without connecting to Telegram or Postgres
     handlers = [h for group in app.handlers.values() for h in group]
-    assert len(handlers) == 1
-    assert isinstance(handlers[0], MessageHandler)
-    assert "42" in repr(handlers[0].filters)
+    messages = [h for h in handlers if isinstance(h, MessageHandler)]
+    buttons = [h for h in handlers if isinstance(h, CallbackQueryHandler)]
+    assert len(messages) == 1 and "42" in repr(messages[0].filters)  # locked to your chat
+    assert len(buttons) == 1  # Approve / Reject (checks the chat inside on_button)

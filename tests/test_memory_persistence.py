@@ -32,7 +32,7 @@ async def test_conversation_survives_a_restart():
     async with open_pool(DB_URL) as pool:
         second = ScriptedModel(script=[AIMessage(content="Pranit")])
         runner = AgentRunner(build_graph(second, [], AsyncPostgresSaver(pool)))
-        assert await runner.send(thread, "What's my name?") == "Pranit"
+        assert (await runner.send(thread, "What's my name?")).text == "Pranit"
 
     seen = [m.content for m in second.calls[0]]
     assert "My name is Pranit" in seen

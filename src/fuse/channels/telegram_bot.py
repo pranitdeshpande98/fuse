@@ -5,18 +5,27 @@ from contextlib import AsyncExitStack
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
-from telegram import Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ChatAction
-from telegram.ext import Application, ApplicationBuilder, ContextTypes, MessageHandler, filters
+from telegram.ext import (
+    Application,
+    ApplicationBuilder,
+    CallbackQueryHandler,
+    ContextTypes,
+    MessageHandler,
+    filters,
+)
 
+from fuse.actions import ActionStore, PostgresActionStore
 from fuse.agent.graph import build_graph
-from fuse.agent.runner import AgentRunner
+from fuse.agent.runner import AgentReply, AgentRunner
 from fuse.compat import use_selector_event_loop_on_windows
 from fuse.config import Settings, get_settings
 from fuse.db import open_pool
 from fuse.llm import build_llm
 from fuse.logging_setup import configure_logging
 from fuse.tools.basic import make_basic_tools
+from fuse.tools.drafts import LocalDraftSink, make_draft_tools
 
 log = logging.getLogger("fuse.telegram")
 
@@ -28,26 +37,87 @@ def is_allowed(chat_id: int | None, allowed_chat_id: int) -> bool:
     return allowed_chat_id != 0 and chat_id == allowed_chat_id
 
 
-def build_runner(settings: Settings, checkpointer: BaseCheckpointSaver) -> AgentRunner:
-    tools = make_basic_tools(settings.user_timezone)
+def build_runner(
+    settings: Settings, checkpointer: BaseCheckpointSaver, actions: ActionStore
+) -> AgentRunner:
+    tools = [
+        *make_basic_tools(settings.user_timezone),
+        *make_draft_tools(actions, LocalDraftSink()),
+    ]
     model = build_llm(settings, tools)
     graph = build_graph(model, tools, checkpointer)
     return AgentRunner(graph, max_steps=settings.agent_max_steps)
+
+
+def thread_id_for(chat_id: int) -> str:
+    return f"telegram:{chat_id}"
+
+
+async def send_reply(update: Update, reply: AgentReply) -> None:
+    """Plain text, or a preview with Approve / Reject buttons."""
+    chat = update.effective_chat
+    assert chat is not None
+    if reply.kind == "approval":
+        key = reply.approval["action_key"]
+        buttons = InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton("Approve", callback_data=f"approve:{key}"),
+                    InlineKeyboardButton("Reject", callback_data=f"reject:{key}"),
+                ]
+            ]
+        )
+        text = f"{reply.text}\n\n{reply.approval['preview']}"
+        await chat.send_message(text[:TELEGRAM_LIMIT], reply_markup=buttons)
+    else:
+        await chat.send_message(reply.text[:TELEGRAM_LIMIT])
 
 
 async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.message is None or update.message.text is None or update.effective_chat is None:
         return
     runner: AgentRunner = context.application.bot_data["runner"]
-    thread_id = f"telegram:{update.effective_chat.id}"
     log.info("message received (%d chars)", len(update.message.text))
     await update.effective_chat.send_action(ChatAction.TYPING)
     try:
-        reply = await runner.send(thread_id, update.message.text)
+        reply = await runner.send(thread_id_for(update.effective_chat.id), update.message.text)
     except Exception:
         log.exception("agent failed")
-        reply = "Something went wrong on my side. Check the terminal logs."
-    await update.message.reply_text(reply[:TELEGRAM_LIMIT])
+        reply = AgentReply("text", "Something went wrong on my side. Check the terminal logs.")
+    await send_reply(update, reply)
+
+
+async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Called when you tap Approve or Reject."""
+    query = update.callback_query
+    if query is None or update.effective_chat is None:
+        return
+    settings: Settings = context.application.bot_data["settings"]
+    if not is_allowed(update.effective_chat.id, settings.telegram_allowed_chat_id):
+        await query.answer()  # buttons pressed by anyone else are ignored
+        return
+
+    decision, _, key = (query.data or "").partition(":")
+    thread_id = thread_id_for(update.effective_chat.id)
+    runner: AgentRunner = context.application.bot_data["runner"]
+
+    # Only act if this exact action is still the one waiting (old buttons do nothing).
+    pending = await runner.pending_approval(thread_id)
+    if not pending or pending.get("action_key") != key:
+        await query.answer("This is no longer waiting for approval.")
+        await query.edit_message_reply_markup(reply_markup=None)
+        return
+
+    approved = decision == "approve"
+    await query.answer("Approved" if approved else "Rejected")
+    await query.edit_message_reply_markup(reply_markup=None)  # buttons work only once
+    log.info("action %s in %s", "approved" if approved else "rejected", thread_id)
+    try:
+        reply = await runner.resume(thread_id, approved=approved)
+    except Exception:
+        log.exception("agent failed")
+        reply = AgentReply("text", "Something went wrong on my side. Check the terminal logs.")
+    await send_reply(update, reply)
 
 
 def build_application(settings: Settings) -> Application:
@@ -60,7 +130,10 @@ def build_application(settings: Settings) -> Application:
         )
         checkpointer = AsyncPostgresSaver(pool)
         await checkpointer.setup()  # creates LangGraph's tables on first run; no-op afterwards
-        app.bot_data["runner"] = build_runner(settings, checkpointer)
+        actions = PostgresActionStore(pool)
+        await actions.ensure_schema()  # creates the actions table on first run
+        app.bot_data["runner"] = build_runner(settings, checkpointer, actions)
+        app.bot_data["settings"] = settings
         log.info("Agent ready; conversations are stored in Postgres")
 
     async def on_shutdown(app: Application) -> None:
@@ -75,6 +148,7 @@ def build_application(settings: Settings) -> Application:
     )
     only_me = filters.Chat(chat_id=settings.telegram_allowed_chat_id)
     app.add_handler(MessageHandler(only_me & filters.TEXT & ~filters.COMMAND, on_message))
+    app.add_handler(CallbackQueryHandler(on_button, pattern=r"^(approve|reject):"))
     return app
 
 
