@@ -1,0 +1,30 @@
+[project]
+name = "fuse"
+version = "0.1.0"
+description = "A personal AI agent with memory, tools, approvals and proactive triggers."
+readme = "README.md"
+authors = [
+    { name = "Pranit Deshpande", email = "71553492+pranitdeshpande98@users.noreply.github.com" }
+]
+requires-python = ">=3.12"
+dependencies = []
+
+[build-system]
+requires = ["uv_build>=0.11.8,<0.12.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+    "ruff>=0.17.6",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]
