@@ -8,6 +8,7 @@ authors = [
 ]
 requires-python = ">=3.12"
 dependencies = [
+    "psycopg[binary]>=3.3.9",
     "pydantic-settings>=2.16.3",
 ]
 
@@ -23,6 +24,7 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = ["integration: needs a running service (e.g. Postgres)"]
 
 [tool.ruff]
 line-length = 100

@@ -16,6 +16,7 @@ class Settings(BaseSettings):
 
     # Secrets use SecretStr: printing or logging the settings shows ********** instead.
     telegram_bot_token: SecretStr = SecretStr("")
+    database_url: SecretStr = SecretStr("postgresql://fuse:fuse@localhost:55432/fuse")
 
 
 @lru_cache
