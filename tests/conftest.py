@@ -1,10 +1,23 @@
 """Shared test helpers."""
 
+import asyncio
+import sys
 from typing import Any
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
+
+
+def pytest_asyncio_loop_factories(config, item):
+    """Tell pytest-asyncio which event loop to create for async tests.
+
+    psycopg's async mode can't run on Windows' default (Proactor) loop, so on Windows
+    we hand pytest-asyncio the selector loop directly.
+    """
+    if sys.platform == "win32":
+        return {"selector": asyncio.SelectorEventLoop}
+    return {"default": asyncio.new_event_loop}
 
 
 class ScriptedModel(BaseChatModel):

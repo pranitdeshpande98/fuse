@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     telegram_bot_token: SecretStr = SecretStr("")
     # Only this Telegram chat may talk to Fuse. 0 means "not set": nobody gets in.
     telegram_allowed_chat_id: int = 0
-    database_url: SecretStr = SecretStr("postgresql://fuse:fuse@localhost:55432/fuse")
+    database_url: SecretStr = SecretStr("postgresql://fuse:fuse@127.0.0.1:55432/fuse")
     # LLM providers: any OpenAI-compatible API (Groq, Cerebras, OpenRouter, local Ollama...)
     llm_primary_base_url: str = "https://api.groq.com/openai/v1"
     llm_primary_api_key: SecretStr = SecretStr("")

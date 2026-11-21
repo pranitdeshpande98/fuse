@@ -1,12 +1,7 @@
-from langchain_core.messages import AIMessage
-from langgraph.checkpoint.memory import InMemorySaver
 from telegram.ext import MessageHandler
 
-from fuse.agent.graph import build_graph
-from fuse.agent.runner import AgentRunner
 from fuse.channels.telegram_bot import build_application, is_allowed
 from fuse.config import Settings
-from tests.conftest import ScriptedModel
 
 
 def test_only_the_allowed_chat_gets_through():
@@ -22,8 +17,7 @@ def test_unset_allowed_chat_lets_nobody_in():
 
 def test_handler_is_locked_to_the_allowed_chat():
     settings = Settings(_env_file=None, telegram_bot_token="123:fake", telegram_allowed_chat_id=42)
-    runner = AgentRunner(build_graph(ScriptedModel(script=[AIMessage("hi")]), [], InMemorySaver()))
-    app = build_application(settings, runner)
+    app = build_application(settings)  # builds without connecting to Telegram or Postgres
     handlers = [h for group in app.handlers.values() for h in group]
     assert len(handlers) == 1
     assert isinstance(handlers[0], MessageHandler)
