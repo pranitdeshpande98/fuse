@@ -21,7 +21,11 @@ from fuse.agent.graph import build_graph
 from fuse.agent.runner import AgentReply, AgentRunner
 from fuse.compat import use_selector_event_loop_on_windows
 from fuse.config import Settings, get_settings
+from fuse.crypto import SecretBox
 from fuse.db import open_pool
+from fuse.google.auth import TokenStore
+from fuse.google.reader import GoogleApiReader, GoogleReader
+from fuse.google.tools import make_google_tools
 from fuse.llm import build_llm
 from fuse.logging_setup import configure_logging
 from fuse.tools.basic import make_basic_tools
@@ -38,10 +42,14 @@ def is_allowed(chat_id: int | None, allowed_chat_id: int) -> bool:
 
 
 def build_runner(
-    settings: Settings, checkpointer: BaseCheckpointSaver, actions: ActionStore
+    settings: Settings,
+    checkpointer: BaseCheckpointSaver,
+    actions: ActionStore,
+    google: GoogleReader | None = None,
 ) -> AgentRunner:
     tools = [
         *make_basic_tools(settings.user_timezone),
+        *(make_google_tools(google) if google else []),
         *make_draft_tools(actions, LocalDraftSink()),
     ]
     model = build_llm(settings, tools)
@@ -132,7 +140,16 @@ def build_application(settings: Settings) -> Application:
         await checkpointer.setup()  # creates LangGraph's tables on first run; no-op afterwards
         actions = PostgresActionStore(pool)
         await actions.ensure_schema()  # creates the actions table on first run
-        app.bot_data["runner"] = build_runner(settings, checkpointer, actions)
+
+        google = None
+        if settings.encryption_key.get_secret_value():
+            tokens = TokenStore(pool, SecretBox(settings.encryption_key.get_secret_value()))
+            await tokens.ensure_schema()
+            google = GoogleApiReader(tokens)
+        else:
+            log.warning("ENCRYPTION_KEY not set: Gmail and Calendar tools are disabled")
+
+        app.bot_data["runner"] = build_runner(settings, checkpointer, actions, google)
         app.bot_data["settings"] = settings
         log.info("Agent ready; conversations are stored in Postgres")
 

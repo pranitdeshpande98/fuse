@@ -10,7 +10,10 @@ from google.oauth2.credentials import Credentials
 
 from fuse.crypto import SecretBox
 from fuse.db import open_pool
-from fuse.google.auth import PROVIDER, GoogleNotConnected, TokenStore, get_credentials
+from fuse.google.auth import GoogleNotConnected, TokenStore, get_credentials
+
+# Tests use their own row, so they can never overwrite your real Google sign-in ("google").
+TEST_PROVIDER = "test-google"
 
 DB_URL = os.environ.get("TEST_DATABASE_URL")
 
@@ -46,6 +49,15 @@ async def test_not_signed_in_says_how_to_fix_it():
         await get_credentials(FakeStore(None))
 
 
+async def test_wrong_encryption_key_says_how_to_fix_it():
+    class UndecryptableStore(FakeStore):
+        async def load(self, provider):
+            raise RuntimeError("Could not decrypt: wrong ENCRYPTION_KEY or corrupted data")
+
+    with pytest.raises(GoogleNotConnected, match="ENCRYPTION_KEY"):
+        await get_credentials(UndecryptableStore(None))
+
+
 async def test_expired_sign_in_says_how_to_fix_it(monkeypatch):
     def refresh_fails(self, request):
         raise RefreshError("invalid_grant: Token has been expired or revoked.")
@@ -63,15 +75,15 @@ async def test_token_is_stored_encrypted_and_loads_back():
     async with open_pool(DB_URL) as pool:
         store = TokenStore(pool, box)
         await store.ensure_schema()
-        await store.save(PROVIDER, fake_token(expiry="2999-01-01T00:00:00Z"))
+        await store.save(TEST_PROVIDER, fake_token(expiry="2999-01-01T00:00:00Z"))
 
         async with pool.connection() as conn:
             cur = await conn.execute(
-                "SELECT encrypted FROM credentials WHERE provider = %s", (PROVIDER,)
+                "SELECT encrypted FROM credentials WHERE provider = %s", (TEST_PROVIDER,)
             )
             raw = bytes((await cur.fetchone())["encrypted"])
         assert b"fake-refresh-token" not in raw  # the database never sees the plaintext
 
-        creds = await get_credentials(store)
+        creds = await get_credentials(store, provider=TEST_PROVIDER)
     assert creds.valid
     assert creds.refresh_token == "1//fake-refresh-token"

@@ -77,9 +77,15 @@ class TokenStore:
         return self._box.decrypt(bytes(row["encrypted"])) if row else None
 
 
-async def get_credentials(store: TokenStore) -> Credentials:
+async def get_credentials(store: TokenStore, provider: str = PROVIDER) -> Credentials:
     """Valid Google credentials, refreshed if needed. Raises GoogleNotConnected otherwise."""
-    token_json = await store.load(PROVIDER)
+    try:
+        token_json = await store.load(provider)
+    except RuntimeError as exc:  # stored with a different ENCRYPTION_KEY
+        raise GoogleNotConnected(
+            f"The saved Google sign-in can't be decrypted (was ENCRYPTION_KEY changed?). "
+            f"{SIGN_IN_HINT}"
+        ) from exc
     if token_json is None:
         raise GoogleNotConnected(SIGN_IN_HINT)
 
@@ -94,7 +100,7 @@ async def get_credentials(store: TokenStore) -> Credentials:
     except RefreshError as exc:
         # Expired or revoked (Testing-mode sign-ins can expire after about a week).
         raise GoogleNotConnected(f"Google sign-in expired. {SIGN_IN_HINT}") from exc
-    await store.save(PROVIDER, creds.to_json())
+    await store.save(provider, creds.to_json())
     return creds
 
 
