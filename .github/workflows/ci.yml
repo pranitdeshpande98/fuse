@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    # A real Postgres with pgvector, just like docker-compose.yml, for the integration tests.
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: fuse
+          POSTGRES_PASSWORD: fuse
+          POSTGRES_DB: fuse
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U fuse -d fuse"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+
+    env:
+      TEST_DATABASE_URL: postgresql://fuse:fuse@127.0.0.1:5432/fuse
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - name: The pgvector extension (init.sql isn't run for CI's database)
+        run: >-
+          docker exec ${{ job.services.postgres.id }}
+          psql -U fuse -d fuse -c "CREATE EXTENSION IF NOT EXISTS vector;"
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Formatting
+        run: uv run ruff format --check .
+
+      - name: Tests (unit + Postgres integration)
+        run: uv run pytest -q
+
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # scan the whole history, not just the latest commit
+
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
