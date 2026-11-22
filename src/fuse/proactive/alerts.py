@@ -68,11 +68,14 @@ class EventHeldItems:
         self._events = events
 
     async def take_held(self) -> list[str]:
-        return [
-            f"From {e.payload.get('from', '?')}: {e.payload.get('subject', '')} ({e.reason})"
-            for e in await self._events.take_held()
-            if e.kind == "email"
-        ]
+        items = []
+        for e in await self._events.take_held():
+            if e.kind == "email":
+                sender, subject = e.payload.get("from", "?"), e.payload.get("subject", "")
+                items.append(f"From {sender}: {subject} ({e.reason})")
+            elif e.kind == "memory":
+                items.append(e.payload.get("text", ""))
+        return [i for i in items if i]
 
 
 class AlertActions:

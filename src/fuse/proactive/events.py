@@ -23,7 +23,7 @@ from typing import Any, Literal, Protocol
 from psycopg.types.json import Jsonb
 from psycopg_pool import AsyncConnectionPool
 
-EventKind = Literal["email", "meeting"]
+EventKind = Literal["email", "meeting", "memory"]
 Status = Literal[
     "new", "ignored", "held", "delivered", "notified", "suggested", "dismissed", "muted"
 ]

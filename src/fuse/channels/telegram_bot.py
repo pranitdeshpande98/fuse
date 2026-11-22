@@ -33,6 +33,7 @@ from fuse.google.tools import make_google_tools
 from fuse.llm import build_llm, build_structured_llm
 from fuse.logging_setup import configure_logging
 from fuse.memory.commands import forget_text, list_memories_text
+from fuse.memory.consolidate import ExtractedFacts, consolidate
 from fuse.memory.embeddings import FastEmbedder
 from fuse.memory.store import MemoryStore, PostgresMemoryStore
 from fuse.memory.tools import make_memory_tools
@@ -43,6 +44,7 @@ from fuse.proactive.events import PostgresEventStore
 from fuse.proactive.gmail_watch import GmailWatcher
 from fuse.proactive.jobs import PostgresJobLog
 from fuse.proactive.meetings import MeetingReminders
+from fuse.proactive.nightly import NightlyConsolidation
 from fuse.proactive.notify import TelegramNotifier
 from fuse.proactive.schedule import Scheduler, SystemClock, parse_hhmm
 from fuse.proactive.store import MuteStore, PostgresCursorStore, PostgresMuteStore
@@ -222,6 +224,7 @@ async def setup_proactive(
     pool: Any,
     google: GoogleApiReader | None,
     memory: MemoryStore,
+    checkpointer: AsyncPostgresSaver,
 ) -> None:
     """Everything Fuse does on its own: the brief, the Gmail watcher, triage and alerts.
 
@@ -254,6 +257,14 @@ async def setup_proactive(
     )
     scheduler = Scheduler(clock, job_log)
     scheduler.add_daily("morning_brief", parse_hhmm(settings.brief_time), brief.run)
+
+    extractor = build_structured_llm(settings, ExtractedFacts)
+    nightly = NightlyConsolidation(
+        lambda: consolidate(pool, checkpointer, extractor, memory), events, clock
+    )
+    scheduler.add_daily(
+        "memory_consolidation", parse_hhmm(settings.consolidation_time), nightly.run
+    )
 
     if google is not None:
 
@@ -337,7 +348,7 @@ def build_application(settings: Settings) -> Application:
         app.bot_data["settings"] = settings
         app.bot_data["memory"] = memory
 
-        await setup_proactive(app, settings, pool, google, memory)
+        await setup_proactive(app, settings, pool, google, memory, checkpointer)
         log.info("Agent ready; conversations are stored in Postgres")
 
     async def on_shutdown(app: Application) -> None:
