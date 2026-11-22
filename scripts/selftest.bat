@@ -12,6 +12,15 @@ echo [1/4] Installing packages (uv sync)...
 call uv sync >> "%LOG%" 2>&1 || goto failed
 
 echo [2/4] Starting the database (Docker)...
+set /a dtries=0
+:waitdocker
+docker info >nul 2>&1 && goto dockerready
+set /a dtries+=1
+if %dtries%==1 echo       Waiting for Docker Desktop to finish starting...
+if %dtries% geq 60 (echo Docker Desktop isn't running.>> "%LOG%" & goto failed)
+timeout /t 3 /nobreak >nul
+goto waitdocker
+:dockerready
 docker compose up -d db >> "%LOG%" 2>&1 || goto failed
 set /a tries=0
 :waitdb
