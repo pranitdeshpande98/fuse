@@ -5,7 +5,6 @@ from contextlib import AsyncExitStack
 from datetime import timedelta
 from typing import Any
 
-from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ChatAction
@@ -19,24 +18,16 @@ from telegram.ext import (
     filters,
 )
 
-from fuse.actions import ActionStore, PostgresActionStore
-from fuse.agent.graph import build_graph
+from fuse.agent.factory import build_runner
 from fuse.agent.runner import AgentReply, AgentRunner
 from fuse.compat import use_selector_event_loop_on_windows
 from fuse.config import Settings, get_settings
-from fuse.crypto import SecretBox
-from fuse.db import open_pool
-from fuse.google.auth import TokenStore
-from fuse.google.drafts import GmailDraftSink
-from fuse.google.reader import GoogleApiReader, GoogleReader
-from fuse.google.tools import make_google_tools
+from fuse.google.reader import GoogleApiReader
 from fuse.llm import build_llm, build_structured_llm
 from fuse.logging_setup import configure_logging
 from fuse.memory.commands import forget_text, list_memories_text
 from fuse.memory.consolidate import ExtractedFacts, consolidate
-from fuse.memory.embeddings import FastEmbedder
-from fuse.memory.store import MemoryStore, PostgresMemoryStore
-from fuse.memory.tools import make_memory_tools
+from fuse.memory.store import MemoryStore
 from fuse.proactive.alerts import AlertActions, AlertSender, EventHeldItems
 from fuse.proactive.brief import MorningBrief
 from fuse.proactive.decide import DecisionEngine, TriageResult
@@ -48,8 +39,7 @@ from fuse.proactive.nightly import NightlyConsolidation
 from fuse.proactive.notify import TelegramNotifier
 from fuse.proactive.schedule import Scheduler, SystemClock, parse_hhmm
 from fuse.proactive.store import MuteStore, PostgresCursorStore, PostgresMuteStore
-from fuse.tools.basic import make_basic_tools
-from fuse.tools.drafts import DraftSink, LocalDraftSink, make_draft_tools
+from fuse.services import open_services
 from fuse.tracing import enable_tracing
 
 log = logging.getLogger("fuse.telegram")
@@ -62,27 +52,6 @@ TELEGRAM_LIMIT = 4000  # Telegram's hard cap is 4096 characters per message
 def is_allowed(chat_id: int | None, allowed_chat_id: int) -> bool:
     """Only the configured chat gets through; an unset (0) config lets nobody in."""
     return allowed_chat_id != 0 and chat_id == allowed_chat_id
-
-
-def build_runner(
-    settings: Settings,
-    checkpointer: BaseCheckpointSaver,
-    actions: ActionStore,
-    google: GoogleReader | None = None,
-    drafts: DraftSink | None = None,
-    memory: MemoryStore | None = None,
-) -> AgentRunner:
-    tools = [
-        *make_basic_tools(settings.user_timezone),
-        *(make_google_tools(google) if google else []),
-        *make_draft_tools(actions, drafts or LocalDraftSink()),
-        *(make_memory_tools(memory, actions) if memory else []),
-    ]
-    model = build_llm(settings, tools)
-    graph = build_graph(
-        model, tools, checkpointer, memory, max_history_messages=settings.agent_history_messages
-    )
-    return AgentRunner(graph, max_steps=settings.agent_max_steps)
 
 
 def thread_id_for(chat_id: int) -> str:
@@ -319,34 +288,15 @@ def build_application(settings: Settings) -> Application:
     resources = AsyncExitStack()
 
     async def on_startup(app: Application) -> None:
-        pool = await resources.enter_async_context(
-            open_pool(settings.database_url.get_secret_value())
-        )
-        checkpointer = AsyncPostgresSaver(pool)
-        await checkpointer.setup()  # creates LangGraph's tables on first run; no-op afterwards
-        actions = PostgresActionStore(pool)
-        await actions.ensure_schema()  # creates the actions table on first run
-
-        google, drafts = None, None
-        if settings.encryption_key.get_secret_value():
-            tokens = TokenStore(pool, SecretBox(settings.encryption_key.get_secret_value()))
-            await tokens.ensure_schema()
-            google = GoogleApiReader(tokens)
-            drafts = GmailDraftSink(tokens)
-        else:
-            log.warning("ENCRYPTION_KEY not set: Gmail and Calendar tools are disabled")
-
-        log.info("Loading the embedding model (the first run downloads ~130 MB)")
-        embedder = FastEmbedder(settings.embedding_model, settings.fastembed_cache_dir)
-        await embedder.embed(["warm up"])  # load it now, not during your first message
-        memory = PostgresMemoryStore(pool, embedder)
-        await memory.ensure_schema()
-
+        services = await resources.enter_async_context(open_services(settings))
+        pool, memory, google = services.pool, services.memory, services.google
+        checkpointer = services.checkpointer
         app.bot_data["runner"] = build_runner(
-            settings, checkpointer, actions, google, drafts, memory
+            settings, checkpointer, services.actions, google, services.drafts, memory
         )
         app.bot_data["settings"] = settings
         app.bot_data["memory"] = memory
+        app.bot_data["services"] = services
 
         await setup_proactive(app, settings, pool, google, memory, checkpointer)
         log.info("Agent ready; conversations are stored in Postgres")

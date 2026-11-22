@@ -1,0 +1,59 @@
+"""Builds the agent. Shared by the Telegram bot and the background worker, so both get the
+same tools and the same safety rules."""
+
+from collections.abc import Sequence
+
+from langchain_core.tools import BaseTool
+from langgraph.checkpoint.base import BaseCheckpointSaver
+
+from fuse.actions import ActionStore
+from fuse.agent.graph import build_graph
+from fuse.agent.prompts import SYSTEM_PROMPT
+from fuse.agent.runner import AgentRunner
+from fuse.config import Settings
+from fuse.google.reader import GoogleReader
+from fuse.google.tools import make_google_tools
+from fuse.llm import build_llm
+from fuse.memory.store import MemoryStore
+from fuse.memory.tools import make_memory_tools
+from fuse.tools.basic import make_basic_tools
+from fuse.tools.drafts import DraftSink, LocalDraftSink, make_draft_tools
+
+
+def build_tools(
+    settings: Settings,
+    actions: ActionStore,
+    google: GoogleReader | None = None,
+    drafts: DraftSink | None = None,
+    memory: MemoryStore | None = None,
+) -> list[BaseTool]:
+    return [
+        *make_basic_tools(settings.user_timezone),
+        *(make_google_tools(google) if google else []),
+        *make_draft_tools(actions, drafts or LocalDraftSink()),
+        *(make_memory_tools(memory, actions) if memory else []),
+    ]
+
+
+def build_runner(
+    settings: Settings,
+    checkpointer: BaseCheckpointSaver,
+    actions: ActionStore,
+    google: GoogleReader | None = None,
+    drafts: DraftSink | None = None,
+    memory: MemoryStore | None = None,
+    extra_tools: Sequence[BaseTool] = (),
+    system_prompt: str = SYSTEM_PROMPT,
+    max_steps: int | None = None,
+) -> AgentRunner:
+    tools = [*build_tools(settings, actions, google, drafts, memory), *extra_tools]
+    model = build_llm(settings, tools)
+    graph = build_graph(
+        model,
+        tools,
+        checkpointer,
+        memory,
+        max_history_messages=settings.agent_history_messages,
+        system_prompt=system_prompt,
+    )
+    return AgentRunner(graph, max_steps=max_steps or settings.agent_max_steps)

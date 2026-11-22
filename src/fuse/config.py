@@ -76,6 +76,11 @@ class Settings(BaseSettings):
         parse_hhmm(value)  # raises a clear error for anything that isn't HH:MM
         return value
 
+    # Background tasks (phase 4): limits for one task, run by `uv run fuse-worker`.
+    task_max_steps: int = 40
+    task_timeout_minutes: int = 15
+    task_max_attempts: int = 3
+
     # Tracing (step 11): send a record of every agent run to LangSmith for debugging.
     langsmith_tracing: bool = False
     langsmith_api_key: SecretStr = SecretStr("")

@@ -69,13 +69,14 @@ def build_graph(
     checkpointer: BaseCheckpointSaver,
     memory: MemoryStore | None = None,
     max_history_messages: int = 30,
+    system_prompt: str = SYSTEM_PROMPT,
 ) -> CompiledStateGraph:
     async def call_model(state: MessagesState) -> dict:
-        system = SYSTEM_PROMPT
+        system = system_prompt
         if memory is not None:
             notes = await memory_context(memory, latest_user_text(state["messages"]))
             if notes:
-                system = f"{SYSTEM_PROMPT}\n{notes}"
+                system = f"{system_prompt}\n{notes}"
         history = recent_messages(state["messages"], max_history_messages)
         response = await model.ainvoke([SystemMessage(system), *history])
         return {"messages": [response]}
