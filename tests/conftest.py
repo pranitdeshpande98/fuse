@@ -1,12 +1,29 @@
 """Shared test helpers."""
 
 import asyncio
+import os
 import sys
 from typing import Any
 
+import pytest
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
+from psycopg.conninfo import conninfo_to_dict
+
+
+def pytest_configure(config):
+    """Integration tests create, change and delete rows. Make sure they can never touch
+    your real data: TEST_DATABASE_URL must point to a database whose name ends in _test."""
+    url = os.environ.get("TEST_DATABASE_URL")
+    if url:
+        dbname = conninfo_to_dict(url).get("dbname", "")
+        if not dbname.endswith("_test"):
+            raise pytest.UsageError(
+                f"TEST_DATABASE_URL points to the database {dbname!r}. Integration tests "
+                "delete data, so they only run against a database named *_test, e.g. "
+                "postgresql://fuse:fuse@127.0.0.1:55432/fuse_test (see README: Tests)."
+            )
 
 
 def pytest_asyncio_loop_factories(config, item):

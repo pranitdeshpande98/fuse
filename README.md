@@ -102,9 +102,18 @@ Pat saying Friday works."*
 API keys needed. Integration tests run against real Postgres.
 
 ```bash
-uv run pytest                                                    # unit tests
-TEST_DATABASE_URL=postgresql://fuse:fuse@127.0.0.1:55432/fuse uv run pytest   # + Postgres
+uv run pytest                                                         # unit tests
+
+# Integration tests use their own database, so they can never touch your real data.
+# Create it once:
+docker compose exec db psql -U fuse -d fuse -c "CREATE DATABASE fuse_test"
+docker compose exec db psql -U fuse -d fuse_test -c "CREATE EXTENSION IF NOT EXISTS vector"
+# Then:
+TEST_DATABASE_URL=postgresql://fuse:fuse@127.0.0.1:55432/fuse_test uv run pytest
 ```
+
+A guard refuses to run integration tests against any database whose name doesn't end in
+`_test`.
 
 Highlights:
 - `test_approval_restart.py`: pause for approval, throw the whole agent away, rebuild it,

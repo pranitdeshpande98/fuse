@@ -16,14 +16,14 @@ jobs:
         env:
           POSTGRES_USER: fuse
           POSTGRES_PASSWORD: fuse
-          POSTGRES_DB: fuse
+          POSTGRES_DB: fuse_test
         ports: ["5432:5432"]
         options: >-
-          --health-cmd "pg_isready -U fuse -d fuse"
+          --health-cmd "pg_isready -U fuse -d fuse_test"
           --health-interval 5s --health-timeout 3s --health-retries 20
 
     env:
-      TEST_DATABASE_URL: postgresql://fuse:fuse@127.0.0.1:5432/fuse
+      TEST_DATABASE_URL: postgresql://fuse:fuse@127.0.0.1:5432/fuse_test
 
     steps:
       - uses: actions/checkout@v4
@@ -36,7 +36,7 @@ jobs:
       - name: The pgvector extension (init.sql isn't run for CI's database)
         run: >-
           docker exec ${{ job.services.postgres.id }}
-          psql -U fuse -d fuse -c "CREATE EXTENSION IF NOT EXISTS vector;"
+          psql -U fuse -d fuse_test -c "CREATE EXTENSION IF NOT EXISTS vector;"
 
       - name: Lint
         run: uv run ruff check .
