@@ -182,3 +182,56 @@ async def test_reminder_command_and_buttons_are_routed():
     core, *_ = make_core([], reminders=store, clock=clock)
     assert "Call Pat" in (await core.command(THREAD, "reminders"))[0].text
     assert (await core.button(THREAD, f"rm:done:{r.id}")).toast == "Done."
+
+
+async def test_applied_button_marks_applied_and_sets_a_follow_up_reminder():
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from fuse.jobs.store import InMemoryJobStore
+    from fuse.proactive.schedule import FixedClock
+    from fuse.reminders.store import InMemoryReminderStore
+
+    clock = FixedClock(datetime(2026, 11, 22, 10, 0, tzinfo=ZoneInfo("America/Chicago")))
+    events, jobs, reminders = InMemoryEventStore(), InMemoryJobStore(), InMemoryReminderStore()
+    match = {
+        "job_key": "k1",
+        "company": "RAND",
+        "title": "SAP Analyst",
+        "url": "https://rand.example/1",
+    }
+    event = await events.add("job", "job:k1", match)
+    core, *_ = make_core([], events=events, jobs=jobs, reminders=reminders, clock=clock)
+
+    result = await core.button(THREAD, f"ja:{event.id}")
+    assert result.only_this_row
+    assert "Marked applied: RAND, SAP Analyst" in result.messages[0].text
+    assert "Wed 02 Dec at 9:00" in result.messages[0].text
+    (app,) = await jobs.list()
+    assert (app.stage, str(app.last_contact)) == ("applied", "2026-11-22")
+    (reminder,) = await reminders.upcoming()
+    assert "Follow up on your RAND application" in reminder.text
+    assert reminder.due_at == datetime(2026, 12, 2, 9, 0, tzinfo=ZoneInfo("America/Chicago"))
+
+    # Track afterwards must not move it back to "interested"
+    tracked = await core.button(THREAD, f"jt:{event.id}")
+    assert "Already tracked: RAND, SAP Analyst [applied]" in tracked.messages[0].text
+    assert (await jobs.list())[0].stage == "applied"
+
+
+def test_applied_removes_that_jobs_whole_row():
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+    from fuse.channels.telegram_bot import without_button
+
+    markup = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(f"{v} {i}", callback_data=f"{c}:{i}")
+                for v, c in (("Track", "jt"), ("Applied", "ja"))
+            ]
+            for i in (1, 2)
+        ]
+    )
+    left = without_button(markup, "ja:1", whole_row=True)
+    assert [[b.callback_data for b in row] for row in left.inline_keyboard] == [["jt:2", "ja:2"]]

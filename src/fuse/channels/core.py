@@ -9,12 +9,14 @@ draft gets, what /tasks shows) live here once, so every channel behaves the same
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from datetime import datetime, time, timedelta
+from typing import Any
 
 from fuse.agent.runner import AgentReply, AgentRunner
 from fuse.approval_ui import after_allowing, approval_buttons, approval_text
 from fuse.contacts import ContactStore, contacts_text
 from fuse.jobalerts.client import JobAlertsClient, JobAlertsError
-from fuse.jobalerts.service import TRACK_BUTTON, ScanRunner
+from fuse.jobalerts.service import APPLIED_BUTTON, TRACK_BUTTON, ScanRunner
 from fuse.jobalerts.tools import status_text
 from fuse.jobs.store import JobStore, jobs_text
 from fuse.memory.commands import forget_text, list_memories_text
@@ -41,6 +43,7 @@ from fuse.tasks.tools import start_task
 
 log = logging.getLogger("fuse.core")
 
+FOLLOW_UP_DAYS = 10
 ERROR_TEXT = "Something went wrong on my side. Check the terminal logs."
 STALE = "This is no longer waiting for approval."
 
@@ -58,6 +61,7 @@ class ButtonResult:
     toast: str = ""  # a short confirmation shown where the button was
     buttons: Rows | None = None  # new buttons for that message; None removes them
     only_this_button: bool = False  # remove just the tapped button, keep the others
+    only_this_row: bool = False  # remove the tapped button's row (e.g. one job's buttons)
     messages: list[Outgoing] = field(default_factory=list)
 
 
@@ -143,6 +147,8 @@ class ChatCore:
                 return await self._task_button(data)
             if data.startswith(f"{TRACK_BUTTON}:"):
                 return await self._track_button(data)
+            if data.startswith(f"{APPLIED_BUTTON}:"):
+                return await self._applied_button(data)
             if data.startswith(f"{REMINDER_BUTTON}:"):
                 if self.reminders is None or self.clock is None:
                     return ButtonResult(toast="Reminders aren't set up.")
@@ -190,33 +196,75 @@ class ChatCore:
         text = await decide_task_approval(self.tasks, data)
         return ButtonResult(toast=text[:200], messages=[Outgoing(text)])
 
-    async def _track_button(self, data: str) -> ButtonResult:
-        """Track on a Job Alerts match: add it to your applications as "interested"."""
+    async def _job_from_button(self, data: str) -> dict | None:
         raw_id = data.partition(":")[2]
         if self.events is None or self.jobs is None or not raw_id.isdigit():
-            return ButtonResult(toast="That button isn't valid any more.")
+            return None
         event = await self.events.get(int(raw_id))
-        if event is None or event.kind != "job":
+        return event.payload if event is not None and event.kind == "job" else None
+
+    async def _existing(self, company: str, role: str) -> Any:
+        assert self.jobs is not None
+        for app in await self.jobs.list():
+            if (app.company.lower(), app.role.lower()) == (company.lower(), role.lower()):
+                return app
+        return None
+
+    async def _track_button(self, data: str) -> ButtonResult:
+        """Track on a Job Alerts match: add it to your applications as "interested"."""
+        job = await self._job_from_button(data)
+        if job is None or self.jobs is None:
             return ButtonResult(toast="I can't find that job any more.")
-        job = event.payload
-        try:
-            app, created = await self.jobs.save(
-                job.get("company") or "?",
-                job.get("title") or "?",
-                "interested",
-                notes=f"From Job Alerts ({job.get('location') or 'location not listed'})",
-                url=job.get("url", ""),
+        company, role = job.get("company") or "?", job.get("title") or "?"
+        existing = await self._existing(company, role)
+        if existing is not None:  # never move an application backwards (applied -> interested)
+            text = f"Already tracked: {existing.company}, {existing.role} [{existing.stage}]."
+            return ButtonResult(
+                toast="Already tracked", messages=[Outgoing(text)], only_this_button=True
             )
-        except ValueError as exc:
-            return ButtonResult(toast=str(exc)[:200], only_this_button=True)
-        if created:
-            text = (
-                f"Added to your applications: {app.company}, {app.role} [interested].\n"
-                "Tell me when you apply and I'll move it to applied. /jobs shows them all."
-            )
-        else:
-            text = f"Already tracked: {app.company}, {app.role} [{app.stage}]."
+        app, _ = await self.jobs.save(
+            company,
+            role,
+            "interested",
+            notes=f"From Job Alerts ({job.get('location') or 'location not listed'})",
+            url=job.get("url", ""),
+        )
+        text = (
+            f"Added to your applications: {app.company}, {app.role} [interested].\n"
+            "Tap Applied when you've applied, or just tell me. /jobs shows them all."
+        )
         return ButtonResult(toast="Tracked", messages=[Outgoing(text)], only_this_button=True)
+
+    async def _applied_button(self, data: str) -> ButtonResult:
+        """Applied on a Job Alerts match: stage applied, and a follow-up reminder."""
+        job = await self._job_from_button(data)
+        if job is None or self.jobs is None or self.clock is None:
+            return ButtonResult(toast="I can't find that job any more.")
+        now = self.clock.now()
+        follow_up = datetime.combine(
+            now.date() + timedelta(days=FOLLOW_UP_DAYS), time(9, 0), tzinfo=now.tzinfo
+        )
+        company, role = job.get("company") or "?", job.get("title") or "?"
+        app, _ = await self.jobs.save(
+            company,
+            role,
+            "applied",
+            last_contact=now.date(),
+            next_step=f"Follow up around {follow_up:%a %d %b} if there's no reply",
+            notes=f"From Job Alerts ({job.get('location') or 'location not listed'})",
+            url=job.get("url", ""),
+        )
+        lines = [f"Marked applied: {app.company}, {app.role}."]
+        if self.reminders is not None:
+            await self.reminders.add(
+                f"Follow up on your {app.company} application ({app.role}), applied "
+                f"{now:%d %b}. Ask me to draft the follow-up.",
+                follow_up,
+            )
+            lines.append(f"I'll remind you to follow up on {follow_up:%a %d %b} at 9:00.")
+        return ButtonResult(
+            toast="Marked applied", messages=[Outgoing("\n".join(lines))], only_this_row=True
+        )
 
     # --- commands ----------------------------------------------------------------------
 

@@ -50,7 +50,7 @@ async def test_new_matches_arrive_once_oldest_first_with_track_buttons():
     assert text.startswith("2 new job matches from Job Alerts:")
     assert text.index("SAP Basis Admin") < text.index("Data Engineer")
     assert "https://rand.example/k4" in text
-    assert [b.label for b in buttons] == ["Track 1", "Track 2"]
+    assert [b.label for b in buttons] == ["Track 1", "Applied 1", "Track 2", "Applied 2"]
     assert buttons[0].data.startswith("jt:")
     assert [e.status for e in events.events.values()] == ["notified", "notified"]
 
@@ -64,7 +64,7 @@ async def test_a_long_list_is_cut_with_a_pointer_to_the_dashboard():
     await watcher.check()
     text, buttons = notifier.sent[0]
     assert text.startswith("12 new job matches") and "(+4 more on the dashboard)" in text
-    assert len(buttons) == 8
+    assert len(buttons) == 16  # Track and Applied for each of the 8 shown
 
 
 async def test_job_alerts_being_off_is_silent():

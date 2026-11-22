@@ -78,11 +78,17 @@ async def deliver(update: Update, messages: list[Outgoing]) -> None:
         )
 
 
-def without_button(markup: Any, data: str) -> Any:
-    """The same buttons minus the one that was tapped (e.g. Track 2 of 5)."""
+def without_button(markup: Any, data: str, whole_row: bool = False) -> Any:
+    """The same buttons minus the one that was tapped (e.g. Track 2 of 5), or minus its
+    whole row (Applied 2 removes job 2's Track and Applied)."""
     if markup is None:
         return None
-    rows = [[b for b in row if b.callback_data != data] for row in markup.inline_keyboard]
+    rows = [
+        []
+        if whole_row and any(b.callback_data == data for b in row)
+        else [b for b in row if b.callback_data != data]
+        for row in markup.inline_keyboard
+    ]
     rows = [row for row in rows if row]
     return InlineKeyboardMarkup(rows) if rows else None
 
@@ -113,8 +119,10 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await query.answer(result.toast[:200] or None)
     # Buttons work once: they're removed, or replaced (e.g. Send appears after Always allow).
     markup = telegram_markup(result.buttons)
-    if result.only_this_button and query.message is not None:
-        markup = without_button(query.message.reply_markup, query.data or "")
+    if (result.only_this_button or result.only_this_row) and query.message is not None:
+        markup = without_button(
+            query.message.reply_markup, query.data or "", whole_row=result.only_this_row
+        )
     # BadRequest here means "message is not modified": the buttons were already gone.
     with contextlib.suppress(BadRequest):
         await query.edit_message_reply_markup(reply_markup=markup)

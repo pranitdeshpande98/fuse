@@ -27,11 +27,18 @@ log = logging.getLogger("fuse.jobalerts")
 CURSOR = "job_alerts"
 MAX_IN_MESSAGE = 8
 TRACK_BUTTON = "jt"
+APPLIED_BUTTON = "ja"
 
 
 def track_buttons(events: list[Event]) -> list[list[Button]]:
-    buttons = [Button(f"Track {i}", f"{TRACK_BUTTON}:{e.id}") for i, e in enumerate(events, 1)]
-    return [buttons[i : i + 4] for i in range(0, len(buttons), 4)]
+    """One row per job: Track it (interested), or mark it Applied right away."""
+    return [
+        [
+            Button(f"Track {i}", f"{TRACK_BUTTON}:{e.id}"),
+            Button(f"Applied {i}", f"{APPLIED_BUTTON}:{e.id}"),
+        ]
+        for i, e in enumerate(events, 1)
+    ]
 
 
 def matches_message(events: list[Event], total: int) -> str:
@@ -43,7 +50,7 @@ def matches_message(events: list[Event], total: int) -> str:
             lines.append(f"   {job['url']}")
     if total > len(events):
         lines.append(f"(+{total - len(events)} more on the dashboard)")
-    lines.append("Tap Track to add one to your applications.")
+    lines.append("Track adds one to your applications; Applied also reminds you to follow up.")
     return "\n".join(lines)
 
 
