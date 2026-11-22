@@ -248,6 +248,7 @@ def build_worker(settings, services, tasks: TaskStore, reporter=None) -> "Worker
         contacts=services.contacts,
         skills=services.skills,
         jobs=services.jobs,
+        job_alerts=services.job_alerts,
     )
     return Worker(
         tasks,

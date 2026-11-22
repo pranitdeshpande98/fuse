@@ -14,6 +14,8 @@ from fuse.config import Settings
 from fuse.contacts import ContactStore
 from fuse.google.reader import GoogleReader
 from fuse.google.tools import make_google_tools
+from fuse.jobalerts.client import JobAlertsClient
+from fuse.jobalerts.tools import make_job_alerts_tools
 from fuse.jobs.store import JobStore
 from fuse.jobs.tools import make_job_tools
 from fuse.llm import build_llm
@@ -35,6 +37,7 @@ def build_tools(
     contacts: ContactStore | None = None,
     skills: list[Skill] | None = None,
     jobs: JobStore | None = None,
+    job_alerts: JobAlertsClient | None = None,
 ) -> list[BaseTool]:
     return [
         *make_basic_tools(settings.user_timezone),
@@ -44,6 +47,7 @@ def build_tools(
         *(make_web_tools() if settings.web_search_enabled else []),
         *(make_skill_tools(skills) if skills else []),
         *(make_job_tools(jobs) if jobs else []),
+        *(make_job_alerts_tools(job_alerts) if job_alerts else []),
     ]
 
 
@@ -60,9 +64,10 @@ def build_runner(
     contacts: ContactStore | None = None,
     skills: list[Skill] | None = None,
     jobs: JobStore | None = None,
+    job_alerts: JobAlertsClient | None = None,
 ) -> AgentRunner:
     tools = [
-        *build_tools(settings, actions, google, drafts, memory, contacts, skills, jobs),
+        *build_tools(settings, actions, google, drafts, memory, contacts, skills, jobs, job_alerts),
         *extra_tools,
     ]
     system_prompt += skills_prompt(skills or [])

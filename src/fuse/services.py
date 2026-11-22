@@ -17,6 +17,7 @@ from fuse.db import open_pool
 from fuse.google.auth import TokenStore
 from fuse.google.drafts import GmailDraftSink
 from fuse.google.reader import GoogleApiReader
+from fuse.jobalerts.client import JobAlertsClient
 from fuse.jobs.store import PostgresJobStore
 from fuse.memory.embeddings import FastEmbedder
 from fuse.memory.store import PostgresMemoryStore
@@ -39,6 +40,7 @@ class Services:
     contacts: PostgresContactStore
     jobs: PostgresJobStore
     skills: list[Skill]
+    job_alerts: JobAlertsClient | None
 
 
 @asynccontextmanager
