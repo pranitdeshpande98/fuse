@@ -10,6 +10,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 
 from fuse.google.auth import TokenStore, get_credentials
 
@@ -18,6 +19,18 @@ class GoogleReader(Protocol):
     async def upcoming_events(self, days_ahead: int) -> list[dict[str, Any]]: ...
     async def search_messages(self, query: str, max_results: int) -> list[dict[str, str]]: ...
     async def read_thread(self, thread_id: str) -> list[dict[str, str]]: ...
+
+
+class HistoryExpired(Exception):
+    """Gmail no longer has history from that far back (roughly a week); start again."""
+
+
+class GmailFeed(Protocol):
+    """What the Gmail watcher needs: new messages since a point in the mailbox's history."""
+
+    async def latest_history_id(self) -> str: ...
+    async def new_message_ids(self, since_history_id: str) -> tuple[list[str], str]: ...
+    async def message_summary(self, message_id: str) -> dict[str, Any] | None: ...
 
 
 def _headers(payload: dict[str, Any]) -> dict[str, str]:
@@ -108,3 +121,77 @@ class GoogleApiReader:
                 }
             )
         return result
+
+    # --- GmailFeed: incremental sync for the watcher ---------------------------------
+
+    async def latest_history_id(self) -> str:
+        gmail = await self._service("gmail", "v1")
+        profile = await asyncio.to_thread(gmail.users().getProfile(userId="me").execute)
+        return str(profile["historyId"])
+
+    async def new_message_ids(self, since_history_id: str) -> tuple[list[str], str]:
+        """IDs of messages added to the inbox since that history ID, oldest first, and the
+        history ID to continue from next time."""
+        gmail = await self._service("gmail", "v1")
+        ids: list[str] = []
+        latest = since_history_id
+        page_token = None
+        while True:
+            request = (
+                gmail.users()
+                .history()
+                .list(
+                    userId="me",
+                    startHistoryId=since_history_id,
+                    historyTypes=["messageAdded"],
+                    labelId="INBOX",
+                    pageToken=page_token,
+                )
+            )
+            try:
+                page = await asyncio.to_thread(request.execute)
+            except HttpError as exc:
+                if exc.resp.status == 404:
+                    raise HistoryExpired(since_history_id) from exc
+                raise
+            for record in page.get("history", []):
+                for added in record.get("messagesAdded", []):
+                    message_id = added["message"]["id"]
+                    if message_id not in ids:
+                        ids.append(message_id)
+            latest = str(page.get("historyId", latest))
+            page_token = page.get("nextPageToken")
+            if not page_token:
+                return ids, latest
+
+    async def message_summary(self, message_id: str) -> dict[str, Any] | None:
+        """Headers and snippet only: enough to triage, without downloading the body."""
+        gmail = await self._service("gmail", "v1")
+        request = (
+            gmail.users()
+            .messages()
+            .get(
+                userId="me",
+                id=message_id,
+                format="metadata",
+                metadataHeaders=["From", "To", "Subject", "Date", "List-Unsubscribe"],
+            )
+        )
+        try:
+            msg = await asyncio.to_thread(request.execute)
+        except HttpError as exc:
+            if exc.resp.status == 404:  # deleted before we got to it
+                return None
+            raise
+        headers = _headers(msg.get("payload", {}))
+        return {
+            "id": msg["id"],
+            "thread_id": msg["threadId"],
+            "from": headers.get("from", ""),
+            "to": headers.get("to", ""),
+            "subject": headers.get("subject", "(no subject)"),
+            "date": headers.get("date", ""),
+            "snippet": msg.get("snippet", ""),
+            "labels": msg.get("labelIds", []),
+            "list_unsubscribe": bool(headers.get("list-unsubscribe")),
+        }
