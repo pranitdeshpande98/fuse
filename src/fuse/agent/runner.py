@@ -8,7 +8,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.errors import GraphRecursionError
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Command
@@ -52,6 +52,19 @@ class AgentRunner:
         if not await self.pending_approval(thread_id):
             return AgentReply("text", "Nothing is waiting for approval.")
         return await self._run(thread_id, Command(resume={"approved": approved}))
+
+    async def add_note(self, thread_id: str, text: str) -> bool:
+        """Put a message Fuse sent on its own (a brief, an alert) into the conversation, so
+        you can reply to it naturally: "draft a reply to the second one".
+
+        Skipped while an approval is waiting, so a paused action is never disturbed.
+        """
+        if await self.pending_approval(thread_id):
+            return False
+        await self._graph.aupdate_state(
+            self._config(thread_id), {"messages": [AIMessage(text)]}, as_node="agent"
+        )
+        return True
 
     async def _run(self, thread_id: str, graph_input: Any) -> AgentReply:
         try:

@@ -24,7 +24,7 @@ def test_handlers_are_registered():
     assert len(messages) == 1 and "42" in repr(messages[0].filters)  # locked to your chat
     assert len(buttons) == 1  # Approve / Reject (checks the chat inside on_button)
     commands = {c for h in handlers if isinstance(h, CommandHandler) for c in h.commands}
-    assert commands == {"memories", "forget"}
+    assert commands == {"brief", "memories", "forget"}
     assert all("42" in repr(h.filters) for h in handlers if isinstance(h, CommandHandler))
 
 

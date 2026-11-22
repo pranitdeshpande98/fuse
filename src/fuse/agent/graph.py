@@ -2,7 +2,13 @@
 
 from collections.abc import Sequence
 
-from langchain_core.messages import AnyMessage, HumanMessage, SystemMessage, trim_messages
+from langchain_core.messages import (
+    AIMessage,
+    AnyMessage,
+    HumanMessage,
+    SystemMessage,
+    trim_messages,
+)
 from langchain_core.runnables import Runnable
 from langchain_core.tools import BaseTool
 from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -29,16 +35,32 @@ def recent_messages(messages: Sequence[AnyMessage], limit: int) -> list[AnyMessa
     trim_messages keeps tool calls together with their results (a model API rejects a tool
     result without its call). If even the current turn is longer than `limit`, it would
     return nothing, so in that case the whole current turn is kept.
+
+    Messages Fuse sent on its own (a morning brief, an alert) sit just before your reply to
+    them, so they are kept too when there is room: "draft a reply to the second one" needs
+    the brief it refers to.
     """
+    messages = list(messages)
     trimmed = trim_messages(
-        list(messages), strategy="last", token_counter=len, max_tokens=limit, start_on="human"
+        messages, strategy="last", token_counter=len, max_tokens=limit, start_on="human"
     )
-    if trimmed:
-        return trimmed
-    for i in range(len(messages) - 1, -1, -1):
-        if isinstance(messages[i], HumanMessage):
-            return list(messages[i:])
-    return list(messages)
+    if not trimmed:
+        for i in range(len(messages) - 1, -1, -1):
+            if isinstance(messages[i], HumanMessage):
+                return messages[i:]
+        return messages
+    start = len(messages) - len(trimmed)
+    notes: list[AnyMessage] = []
+    j = start - 1
+    while j >= 0 and len(trimmed) + len(notes) < limit and _is_note(messages[j]):
+        notes.insert(0, messages[j])
+        j -= 1
+    return [*notes, *trimmed]
+
+
+def _is_note(message: AnyMessage) -> bool:
+    """A plain assistant message: no tool calls, so it's safe to start the window with."""
+    return isinstance(message, AIMessage) and not message.tool_calls
 
 
 def build_graph(

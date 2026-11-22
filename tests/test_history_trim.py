@@ -59,3 +59,16 @@ async def test_the_model_only_sees_recent_messages_but_nothing_is_lost():
 
     state = await runner._graph.aget_state({"configurable": {"thread_id": "t1"}})
     assert len(state.values["messages"]) == 20  # full history kept
+
+
+def test_a_message_fuse_sent_first_is_kept_with_your_reply():
+    brief = AIMessage("Good morning. 1) Pat: Proposal 2) Sam: Budget")
+    messages = [*turn(0), brief, HumanMessage("reply to the second one")]
+    kept = recent_messages(messages, 30)
+    assert kept[-2:] == [brief, messages[-1]]
+
+
+def test_notes_never_push_the_window_past_the_limit():
+    messages = [m for i in range(5) for m in turn(i)] + [AIMessage("alert")] * 5
+    messages.append(HumanMessage("ok"))
+    assert len(recent_messages(messages, 4)) <= 4

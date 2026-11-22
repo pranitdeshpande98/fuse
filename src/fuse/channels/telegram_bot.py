@@ -34,8 +34,10 @@ from fuse.memory.commands import forget_text, list_memories_text
 from fuse.memory.embeddings import FastEmbedder
 from fuse.memory.store import MemoryStore, PostgresMemoryStore
 from fuse.memory.tools import make_memory_tools
+from fuse.proactive.brief import MorningBrief
 from fuse.proactive.jobs import PostgresJobLog
-from fuse.proactive.schedule import Scheduler, SystemClock
+from fuse.proactive.notify import TelegramNotifier
+from fuse.proactive.schedule import Scheduler, SystemClock, parse_hhmm
 from fuse.tools.basic import make_basic_tools
 from fuse.tools.drafts import DraftSink, LocalDraftSink, make_draft_tools
 from fuse.tracing import enable_tracing
@@ -150,6 +152,13 @@ async def on_tick(context: ContextTypes.DEFAULT_TYPE) -> None:
     await scheduler.tick()
 
 
+async def on_brief(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/brief: today's brief right now, without waiting for the morning."""
+    brief: MorningBrief = context.application.bot_data["brief"]
+    await update.effective_chat.send_action(ChatAction.TYPING)  # type: ignore[union-attr]
+    await brief.run()
+
+
 async def on_memories(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/memories: show everything Fuse remembers about you."""
     memory: MemoryStore = context.application.bot_data["memory"]
@@ -198,9 +207,23 @@ def build_application(settings: Settings) -> Application:
         app.bot_data["settings"] = settings
         app.bot_data["memory"] = memory
 
+        runner: AgentRunner = app.bot_data["runner"]
+        chat_id = settings.telegram_allowed_chat_id
+        clock = SystemClock(settings.user_timezone)
+        notifier = TelegramNotifier(app.bot, chat_id)
+
+        async def add_to_conversation(text: str) -> None:
+            await runner.add_note(thread_id_for(chat_id), text)
+
+        brief = MorningBrief(
+            clock, notifier, build_llm(settings), google, memory, on_sent=add_to_conversation
+        )
+        app.bot_data["brief"] = brief
+
         job_log = PostgresJobLog(pool)
         await job_log.ensure_schema()
-        scheduler = Scheduler(SystemClock(settings.user_timezone), job_log)
+        scheduler = Scheduler(clock, job_log)
+        scheduler.add_daily("morning_brief", parse_hhmm(settings.brief_time), brief.run)
         app.bot_data["scheduler"] = scheduler
         if settings.proactive_enabled and app.job_queue is not None:
             app.job_queue.run_repeating(on_tick, interval=TICK_SECONDS, first=15, name="tick")
@@ -219,6 +242,7 @@ def build_application(settings: Settings) -> Application:
     )
     only_me = filters.Chat(chat_id=settings.telegram_allowed_chat_id)
     app.add_handler(MessageHandler(only_me & filters.TEXT & ~filters.COMMAND, on_message))
+    app.add_handler(CommandHandler("brief", on_brief, filters=only_me))
     app.add_handler(CommandHandler("memories", on_memories, filters=only_me))
     app.add_handler(CommandHandler("forget", on_forget, filters=only_me))
     app.add_handler(CallbackQueryHandler(on_button, pattern=r"^(approve|reject):"))
