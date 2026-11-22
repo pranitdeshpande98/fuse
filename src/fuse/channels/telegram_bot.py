@@ -61,7 +61,7 @@ def build_runner(
         *(make_memory_tools(memory, actions) if memory else []),
     ]
     model = build_llm(settings, tools)
-    graph = build_graph(model, tools, checkpointer)
+    graph = build_graph(model, tools, checkpointer, memory)
     return AgentRunner(graph, max_steps=settings.agent_max_steps)
 
 
