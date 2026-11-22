@@ -52,6 +52,9 @@ class Settings(BaseSettings):
     llm_light_model: str = "openai/gpt-oss-20b"
 
     llm_timeout_seconds: float = 60.0
+    # Free daily tokens per model (Groq: ~200k). /status shows usage; a warning at 80%.
+    # 0 turns the warning off.
+    llm_daily_token_quota: int = 200_000
 
     # Agent (step 7): max model + tool steps in one turn, so a loop can't burn the free quota.
     agent_max_steps: int = 12

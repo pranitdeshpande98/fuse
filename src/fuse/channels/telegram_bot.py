@@ -49,6 +49,7 @@ from fuse.skills.loader import describe_schedule, parse_schedule
 from fuse.skills.tools import start_skill
 from fuse.tasks.tools import make_task_tools
 from fuse.tracing import enable_tracing
+from fuse.usage import QuotaWatcher
 
 log = logging.getLogger("fuse.telegram")
 
@@ -235,6 +236,8 @@ async def setup_proactive(
     if services is not None:
         sender = ReminderSender(services.reminders, notifier, clock)
         scheduler.add_interval("reminders", timedelta(seconds=TICK_SECONDS), sender.check)
+        quota = QuotaWatcher(services.usage, notifier, job_log, settings.llm_daily_token_quota)
+        scheduler.add_interval("quota_warning", timedelta(minutes=5), quota.check)
         for skill in services.skills:
             if not skill.schedule:
                 continue

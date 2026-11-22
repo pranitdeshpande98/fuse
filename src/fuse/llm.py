@@ -15,6 +15,7 @@ from langchain_core.tools import BaseTool
 from langchain_openai import ChatOpenAI
 
 from fuse.config import LLMProvider, Settings, get_settings
+from fuse.usage import USAGE_CALLBACK
 
 
 def build_chat_model(provider: LLMProvider, timeout: float) -> BaseChatModel:
@@ -25,6 +26,7 @@ def build_chat_model(provider: LLMProvider, timeout: float) -> BaseChatModel:
         temperature=0,
         timeout=timeout,
         max_retries=1,
+        callbacks=[USAGE_CALLBACK],  # counts tokens per model per day (see fuse.usage)
     )
 
 

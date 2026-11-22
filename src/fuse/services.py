@@ -24,6 +24,7 @@ from fuse.memory.store import PostgresMemoryStore
 from fuse.reminders.store import PostgresReminderStore
 from fuse.skills.loader import Skill, load_skills
 from fuse.tasks.queue import PostgresTaskStore
+from fuse.usage import PostgresUsageStore, set_usage_store
 
 log = logging.getLogger("fuse.services")
 
@@ -43,6 +44,7 @@ class Services:
     skills: list[Skill]
     job_alerts: JobAlertsClient | None
     reminders: PostgresReminderStore
+    usage: PostgresUsageStore
 
 
 @asynccontextmanager
@@ -80,6 +82,9 @@ async def open_services(settings: Settings) -> AsyncIterator[Services]:
         skills = load_skills(settings.skills_dir)
         log.info("Skills: %s", ", ".join(s.name for s in skills) or "none found")
         job_alerts = JobAlertsClient(settings.job_alerts_url) if settings.job_alerts_url else None
+        usage = PostgresUsageStore(pool)
+        await usage.ensure_schema()
+        set_usage_store(usage)  # every model call in this process is counted from here on
 
         yield Services(
             pool=pool,
@@ -95,4 +100,5 @@ async def open_services(settings: Settings) -> AsyncIterator[Services]:
             skills=skills,
             job_alerts=job_alerts,
             reminders=reminders,
+            usage=usage,
         )

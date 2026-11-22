@@ -23,6 +23,8 @@ def _pinned_model(settings, tools=()):
     """The primary provider only, with patient retries: what you measure is what you run."""
     from langchain_openai import ChatOpenAI
 
+    from fuse.usage import USAGE_CALLBACK
+
     providers = settings.llm_providers()
     if not providers:
         raise SystemExit("No LLM provider configured: set LLM_PRIMARY_API_KEY in .env")
@@ -34,6 +36,7 @@ def _pinned_model(settings, tools=()):
         temperature=0,
         timeout=settings.llm_timeout_seconds,
         max_retries=6,  # the OpenAI client waits as the rate-limit headers ask
+        callbacks=[USAGE_CALLBACK],  # evals spend the same daily quota: count them too
     )
     return (model.bind_tools(list(tools)) if tools else model), provider.model
 
