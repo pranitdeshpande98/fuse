@@ -37,6 +37,10 @@ Built with LangGraph, open-weight models (via free OpenAI-compatible APIs) and P
   employers' careers portals): `/scan` from my phone starts a scan, new matches arrive on
   Telegram with a *Track* button (and by email, as before), and `/dashboard` shows which
   portals are failing.
+- **Reminds me**: "remind me tomorrow at 9 to call Pat", with *Done / Snooze 1 h /
+  Tomorrow 9:00* buttons. `/reminders` lists them.
+- **Tells me if it's healthy**: `/status` shows the worker, Google sign-in, Job Alerts,
+  the last brief, and tokens used today against the free quota (with a warning at 80%).
 - **Runs on free tiers**: up to three providers in a fallback chain, and a smaller model
   for high-volume background work so the big model's daily quota goes to my chats.
 - **Is measured**: `uv run fuse-evals` checks memory recall, email triage and 12 agent
@@ -245,11 +249,25 @@ reads the other's database and each can change inside without breaking the other
   newer than the last one it reported (a cursor, like the Gmail watcher). Each job is stored
   under its Job Alerts key, so you never hear about the same one twice. The first run starts
   from now rather than sending 3,000 old jobs.
-- **Track** adds a match to `job_applications` as *interested*, with its link. The tracker
-  skill moves it to *applied* when the confirmation email arrives; the weekly review lists
-  the week's best new matches.
+- **Fit score, no tokens:** each new match's title is compared by meaning with the lines of
+  `job_profile.md` (your kinds of role), using the local embedding model. Matches arrive best
+  first with the reason ("strong fit: SAP ABAP developer"). Thresholds were measured on real
+  Job Alerts titles: 0.80+ strong, 0.70+ possible. `JOB_ALERTS_MIN_FIT` can hide weaker ones
+  from Telegram (still counted, still emailed).
+- **Track** adds a match to `job_applications` as *interested*, with its link. **Applied**
+  marks it applied and sets a follow-up reminder for 10 days later. Track never moves an
+  application backwards. The tracker skill moves *interested* to *applied* when the
+  confirmation email arrives; the weekly review lists the week's best new matches.
 - **Not running?** Every tool and command says how to start it (`start.bat`) instead of
   failing; the watcher just stays quiet.
+
+## Health and quota
+
+Every chat model carries one callback that adds each reply's tokens to `llm_usage` (day,
+model). Both processes write to it, so `/status` shows the real total, per model, against
+`LLM_DAILY_TOKEN_QUOTA` (Groq: ~200k a day per model), and a Telegram note arrives once a
+day when a model passes 80%. The worker writes a heartbeat every 30 s, so `/status` can say
+"Worker: NOT RUNNING (last seen 30 min ago)" instead of tasks silently never starting.
 
 ## Safety, by design
 
@@ -311,9 +329,12 @@ docker compose up -d db       # Postgres + pgvector on 127.0.0.1:55432
 Try: *"What's on my calendar this week?"*, then *"Draft a reply to the latest email from
 Pat saying Friday works."*, then `/brief`.
 
-Commands: `/brief` · `/scan` · `/dashboard` · `/jobs` · `/task <goal>` · `/tasks` ·
-`/cancel <id>` · `/skills` · `/skill <name>` · `/contacts [add|remove]` · `/memories` ·
-`/forget <id>` · `/unmute [address]`
+Commands: `/status` · `/brief` · `/scan` · `/dashboard` · `/jobs` · `/reminders` ·
+`/task <goal>` · `/tasks` · `/cancel <id>` · `/skills` · `/skill <name>` ·
+`/contacts [add|remove]` · `/memories` · `/forget <id>` · `/unmute [address]`
+
+**Job fit:** copy `job_profile.example.md` to `job_profile.md` and list the kinds of role you
+want, one per line. Until you do, the example is used.
 
 **Job Alerts:** start it as usual (`start.bat` in its folder). Fuse finds it at
 `JOB_ALERTS_URL` (default `http://127.0.0.1:5000`); leave that empty to turn it off.
@@ -325,7 +346,7 @@ use, Google's verification isn't needed.
 
 ## Tests
 
-306 tests. Unit tests use a scripted fake model and fake Google services: no network and no
+333 tests. Unit tests use a scripted fake model and fake Google services: no network and no
 API keys needed. Integration tests run against real Postgres.
 
 ```bash
@@ -350,6 +371,8 @@ Highlights:
 - `test_actions.py`: an action never runs twice, and a failed one can be retried.
 - `test_consolidate.py`: consolidation ignores an email that says "remember…", and never
   saves a fact that conflicts with an existing memory.
+- `test_startup.py`: runs the bot's real startup hook and builds the real worker against the
+  test database, checking every command, tool and scheduled job is wired.
 - `test_job_alerts_service.py`: against a fake Job Alerts server: the first check doesn't
   flood you with old jobs, a match is sent once, a scan reports back and its matches follow.
 - `test_behaviour_evals.py`: the ideal agent passes all 12 scenarios; obeying an injected
@@ -391,7 +414,10 @@ src/fuse/
   channels/     core.py (channel-neutral) · telegram_bot.py (adapter) · whoami.py
   skills/       loader.py (SKILL.md) · tools.py (use_skill, /skills)
   jobs/         store.py (job_applications) · tools.py
-  jobalerts/    client.py (Job Alerts API) · service.py (scan, match watcher) · tools.py
+  jobalerts/    client.py (Job Alerts API) · service.py (scan, match watcher) · fit.py · tools.py
+  reminders/    store.py · service.py (tools, sender, buttons)
+  status.py     /status health check
+  usage.py      token usage per model per day, quota warning
   evals/        world.py (fake inbox/calendar/web) · behaviour.py · cli.py · report.py
   actions.py    actions log + idempotency
   llm.py        provider fallback chain
@@ -431,6 +457,10 @@ tests/          unit + integration tests
   checked addresses are used.
 - **Postgres is a fine queue at this scale:** `SKIP LOCKED` plus leases and fencing gives
   safe concurrent workers without another service to run.
+- **Test the real entry point, not a hand-built copy:** a refactor left `open_services`
+  without the job tracker, skills and Job Alerts, so `uv run fuse` would have crashed at
+  startup, while every test passed, because the tests built the services by hand. Now a
+  smoke test runs the real startup, and the hand-built stand-in mirrors every field.
 - **Integrate through the API, not the database:** reading Job Alerts' SQLite file directly
   would have been quicker, and would break the day its schema changes. Its HTTP API is the
   contract both projects already rely on.
@@ -454,4 +484,5 @@ tests/          unit + integration tests
   channel-neutral core
 - [x] **Phase 6:** Job Alerts dashboard on Telegram (`/scan`, new matches, Track into the
   tracker). WhatsApp dropped: Telegram does the job for free.
+- [x] **Phase 6.5:** reminders, `/status` and the quota warning, Applied button, job fit score
 - [ ] **Phase 7:** cloud deployment
