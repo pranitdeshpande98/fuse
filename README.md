@@ -325,7 +325,7 @@ use, Google's verification isn't needed.
 
 ## Tests
 
-305 tests. Unit tests use a scripted fake model and fake Google services: no network and no
+306 tests. Unit tests use a scripted fake model and fake Google services: no network and no
 API keys needed. Integration tests run against real Postgres.
 
 ```bash

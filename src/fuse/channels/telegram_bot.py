@@ -229,6 +229,7 @@ async def setup_proactive(
             "job_alerts_matches", timedelta(minutes=settings.job_alerts_poll_minutes), watcher.check
         )
         if scan_runner is not None:
+            scan_runner.before = watcher.check  # bookmark set before the first scan runs
             scan_runner.after = watcher.check  # a scan's new matches arrive right after it
     if services is not None:
         for skill in services.skills:

@@ -100,3 +100,18 @@ async def test_scan_explains_when_job_alerts_is_off_or_busy():
         runner.start()
         await runner.wait()
         assert notifier.texts[0].startswith("The scan didn't run:") and reason in notifier.texts[0]
+
+
+async def test_the_very_first_scan_lists_only_its_own_new_jobs():
+    """Fuse has never seen Job Alerts before: no bookmark yet. The first /scan must send
+    exactly the jobs it found, not nothing, and not the 3 old ones."""
+    fake = FakeJobAlerts()  # 3 old jobs already in Job Alerts
+    client, watcher, _, notifier, _ = setup(fake)
+    fake.next_new = [job("k9", "2026-11-22T23:59:00+00:00", "Python Developer")]
+    runner = ScanRunner(client, notifier, after=watcher.check, before=watcher.check)
+    runner.start()
+    await runner.wait()
+    summary, matches = notifier.texts
+    assert matches.startswith("1 new job match from Job Alerts:")
+    assert "Python Developer" in matches
+    assert "Data Engineer" not in matches and "SAP Analyst" not in matches  # the old ones

@@ -108,8 +108,13 @@ class ScanRunner:
         client: JobAlertsClient,
         notifier: Notifier,
         after: Callable[[], Awaitable[Any]] | None = None,
+        before: Callable[[], Awaitable[Any]] | None = None,
     ) -> None:
         self._client, self._notifier, self.after = client, notifier, after
+        # Run before scanning: the match watcher sets its bookmark on its first ever run,
+        # so it must look *before* the scan, or the scan's own new jobs would land behind
+        # the bookmark and never reach Telegram.
+        self.before = before
         self._task: asyncio.Task | None = None
 
     @property
@@ -131,6 +136,8 @@ class ScanRunner:
 
     async def _run(self) -> None:
         try:
+            if self.before is not None:
+                await self.before()
             result = await self._client.scan()
         except JobAlertsError as exc:
             await self._notifier.send(f"The scan didn't run: {exc}")

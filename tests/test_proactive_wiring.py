@@ -123,4 +123,5 @@ async def test_setup_with_job_alerts_and_scheduled_skills():
         core = app.bot_data["core"]
         assert core.scan_runner is app.bot_data["scan_runner"]
         assert core.scan_runner.after is not None  # a scan's matches follow it
+        assert core.scan_runner.before is not None  # bookmark set before the first scan
         assert "2 of 3 portals active" in (await core.command("t", "dashboard"))[0].text
