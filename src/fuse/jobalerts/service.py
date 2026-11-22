@@ -180,7 +180,10 @@ class ScanRunner:
             log.exception("scan failed")
             await self._notifier.send("The scan failed on my side. Check the terminal logs.")
             return
-        lines = [f"Scan done: {result.scanned} portals, {len(result.new)} new matches."]
+        n_new = len(result.new)
+        lines = [
+            f"Scan done: {result.scanned} portals, {n_new} new match{'' if n_new == 1 else 'es'}."
+        ]
         if result.emailed:
             lines.append("Job Alerts emailed you the new ones.")
         elif result.new:
@@ -188,7 +191,8 @@ class ScanRunner:
         if result.suppressed:
             lines.append(f"{result.suppressed} filtered out by the Job Alerts smart filter.")
         if result.errors:
-            lines.append(f"{len(result.errors)} portals failed, e.g. {result.errors[0][:100]}")
+            n = len(result.errors)
+            lines.append(f"{n} portal{'' if n == 1 else 's'} failed, e.g. {result.errors[0][:100]}")
         await self._notifier.send("\n".join(lines))
         if self.after is not None:
             await self.after()  # the new matches, with Track buttons, right away

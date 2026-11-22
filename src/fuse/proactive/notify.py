@@ -2,7 +2,7 @@
 can be tested with a recording fake (and a WhatsApp notifier can be added in Phase 6)."""
 
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Any, Protocol
 
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 
@@ -63,9 +63,32 @@ class TelegramNotifier:
         self._chat_id = chat_id
 
     async def send(self, text: str, buttons: Buttons | None = None) -> None:
-        await self._bot.send_message(
-            self._chat_id, text[:TELEGRAM_LIMIT], reply_markup=telegram_markup(buttons)
-        )
+        await send_formatted(self._bot, self._chat_id, text, telegram_markup(buttons))
+
+
+FORMATTED_PART = 3500  # leaves room for the HTML tags Telegram formatting adds
+
+
+async def send_formatted(bot: Bot, chat_id: int, text: str, markup: Any = None) -> None:
+    """Send Markdown-ish text with Telegram formatting; long text in parts (buttons on the
+    last). If Telegram rejects the formatting, that part goes as plain text instead."""
+    from telegram.error import BadRequest
+
+    from fuse.channels.telegram_format import to_plain, to_telegram_html
+
+    parts = split_message(text, FORMATTED_PART)
+    for i, part in enumerate(parts):
+        part_markup = markup if i == len(parts) - 1 else None
+        try:
+            await bot.send_message(
+                chat_id, to_telegram_html(part), parse_mode="HTML", reply_markup=part_markup
+            )
+        except BadRequest as exc:
+            if "parse" not in str(exc).lower() and "entit" not in str(exc).lower():
+                raise
+            await bot.send_message(
+                chat_id, to_plain(part)[:TELEGRAM_LIMIT], reply_markup=part_markup
+            )
 
 
 @dataclass

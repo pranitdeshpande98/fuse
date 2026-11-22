@@ -12,3 +12,8 @@ def test_logs_go_to_a_file_per_process_when_asked(tmp_path, monkeypatch):
     assert "hello from the bot" in (tmp_path / "logs" / "bot.log").read_text()
     monkeypatch.delenv("FUSE_LOG_DIR")
     configure_logging("WARNING")  # back to console only, for the other tests
+
+
+def test_scheduler_chatter_is_silenced():
+    configure_logging("INFO")
+    assert not logging.getLogger("apscheduler.executors.default").isEnabledFor(logging.INFO)

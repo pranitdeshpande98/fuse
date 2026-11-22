@@ -72,3 +72,30 @@ def test_notes_never_push_the_window_past_the_limit():
     messages = [m for i in range(5) for m in turn(i)] + [AIMessage("alert")] * 5
     messages.append(HumanMessage("ok"))
     assert len(recent_messages(messages, 4)) <= 4
+
+
+def test_a_huge_old_message_is_dropped_but_the_current_turn_stays():
+    from fuse.agent.graph import approx_tokens
+
+    big_table = AIMessage("| row |\n" * 3000)  # ~6,000 tokens: an old task result
+    messages = [HumanMessage("list my emails"), big_table, *turn(1), HumanMessage("hi again")]
+    kept = recent_messages(messages, 30, max_tokens=500)
+    assert big_table not in kept
+    assert kept[-1].content == "hi again"
+    assert kept[0].type == "human"  # still starts on a user message
+    assert sum(approx_tokens(m) for m in kept) <= 500
+
+
+def test_the_current_turn_is_kept_even_when_it_alone_is_too_big():
+    long_question = HumanMessage("x" * 20_000)
+    messages = [*turn(0), *turn(1), long_question]
+    kept = recent_messages(messages, 30, max_tokens=100)
+    # Your message, plus Fuse's reply right before it ("yes, do that" needs it).
+    assert kept == [messages[-2], long_question]
+
+
+def test_a_note_right_before_your_message_stays_with_it():
+    brief = AIMessage("Good morning. 1) Pat 2) Sam")
+    messages = [*turn(0), AIMessage("x" * 4000), brief, HumanMessage("reply to the first")]
+    kept = recent_messages(messages, 30, max_tokens=50)
+    assert kept[-2:] == [brief, messages[-1]]

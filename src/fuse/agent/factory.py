@@ -95,6 +95,7 @@ def build_runner(
         checkpointer,
         memory,
         max_history_messages=settings.agent_history_messages,
+        max_history_tokens=settings.agent_history_tokens,
         system_prompt=system_prompt,
     )
     return AgentRunner(graph, max_steps=max_steps or settings.agent_max_steps)

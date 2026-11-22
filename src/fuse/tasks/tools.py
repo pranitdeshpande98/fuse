@@ -34,14 +34,9 @@ async def start_task(tasks: TaskStore, goal: str, max_attempts: int = 3) -> str:
 def make_task_tools(tasks: TaskStore, max_attempts: int = 3) -> list[BaseTool]:
     @tool
     async def start_background_task(goal: str) -> str:
-        """Hand off work that needs many steps or several minutes, so the chat stays free.
-
-        Use it for jobs like going through many emails, research that needs several web
-        searches, or preparing a report. Don't use it for quick questions you can answer
-        with one or two tool calls. Write the goal as a complete instruction including
-        everything the user asked for; the task can't see this chat. The result arrives
-        later as a separate message.
-        """
+        """Hand off work needing many steps (many emails, several web searches, a
+        report) so the chat stays free; not for quick questions. Write the goal as a
+        complete instruction: the task can't see this chat. The result arrives later."""
         return await start_task(tasks, goal, max_attempts)
 
     @tool

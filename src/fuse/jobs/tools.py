@@ -17,10 +17,9 @@ def make_job_tools(jobs: JobStore) -> list[BaseTool]:
         notes: str | None = None,
         url: str = "",
     ) -> str:
-        """Add or update one job application in the user's tracker (matched by company and
-        role). stage is one of: interested, applied, screening, interview, offer, rejected,
-        withdrawn. last_contact is a date like 2026-11-21. thread_id is the Gmail thread,
-        url the job posting. Leave next_step or notes out to keep what's already saved."""
+        """Add or update a job application (matched by company + role). stage: interested,
+        applied, screening, interview, offer, rejected or withdrawn. last_contact:
+        YYYY-MM-DD. Omit next_step/notes to keep what's saved."""
         try:
             app, created = await jobs.save(
                 company, role, stage, parse_day(last_contact), next_step, thread_id, notes, url

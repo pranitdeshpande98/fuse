@@ -61,6 +61,9 @@ class Settings(BaseSettings):
     # How many recent messages the model sees each turn (phase 2). Long-term memory holds
     # what matters from older ones; the full history is still kept in the database.
     agent_history_messages: int = 30
+    # And at most about this many tokens of history per call: Groq's free tier allows
+    # 8,000 tokens a minute, and Fuse's prompt and tools already take about 3,000.
+    agent_history_tokens: int = 2_500
 
     # Google sign-in (step 10)
     google_client_secrets_file: str = "credentials.json"

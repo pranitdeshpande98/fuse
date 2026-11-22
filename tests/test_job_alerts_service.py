@@ -83,8 +83,8 @@ async def test_scan_reports_back_and_then_sends_the_new_matches():
     assert "already running" in runner.start()  # a second /scan while the first runs
     await runner.wait()
     summary, match_message = notifier.texts
-    assert summary.startswith("Scan done: 2 portals, 1 new matches.")
-    assert "emailed you" in summary and "1 portals failed" in summary
+    assert summary.startswith("Scan done: 2 portals, 1 new match.")
+    assert "emailed you" in summary and "1 portal failed" in summary
     assert "Python Developer" in match_message
     assert fake.scans == 1
 

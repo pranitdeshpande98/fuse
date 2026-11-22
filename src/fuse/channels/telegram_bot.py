@@ -42,7 +42,7 @@ from fuse.proactive.gmail_watch import GmailWatcher
 from fuse.proactive.jobs import PostgresJobLog
 from fuse.proactive.meetings import MeetingReminders
 from fuse.proactive.nightly import NightlyConsolidation
-from fuse.proactive.notify import TelegramNotifier, telegram_markup
+from fuse.proactive.notify import TelegramNotifier, send_formatted, telegram_markup
 from fuse.proactive.schedule import Scheduler, SystemClock, parse_hhmm
 from fuse.proactive.store import PostgresCursorStore, PostgresMuteStore
 from fuse.reminders.service import ReminderSender
@@ -76,9 +76,8 @@ async def deliver(update: Update, messages: list[Outgoing]) -> None:
     chat = update.effective_chat
     assert chat is not None
     for message in messages:
-        await chat.send_message(
-            message.text[:TELEGRAM_LIMIT], reply_markup=telegram_markup(message.buttons)
-        )
+        markup = telegram_markup(message.buttons)
+        await send_formatted(chat.get_bot(), chat.id, message.text, markup)
 
 
 def without_button(markup: Any, data: str, whole_row: bool = False) -> Any:

@@ -24,3 +24,5 @@ def configure_logging(level: str = "INFO", name: str | None = None) -> None:
     logging.basicConfig(level=level, format=FORMAT, handlers=handlers, force=True)
     # httpx logs every request URL, and Telegram API URLs contain the bot token.
     logging.getLogger("httpx").setLevel(logging.WARNING)
+    # The scheduler logs two lines every 30 seconds ("Running job tick ..."): pure noise.
+    logging.getLogger("apscheduler").setLevel(logging.WARNING)
