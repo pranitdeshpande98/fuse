@@ -271,6 +271,11 @@ tests/          unit + integration tests
 - [x] **Phase 2:** long-term memory (profile + pgvector recall, consolidation, evals)
 - [x] **Phase 3:** proactive: morning brief, email alerts, meeting reminders, decision engine
 - [ ] **Phase 4:** long-running tasks on background workers
+  - [ ] **Send button:** a draft preview gets *Send* next to *Save as draft* and *Reject*.
+    Sending happens only when you tap *Send*. Recipients are checked in code against an
+    allowlist (people already in the thread, or contacts you approved): if any recipient
+    fails, *Send* isn't offered, only *Save as draft*. To, CC and BCC are shown in full, and
+    each send runs exactly once (idempotency key).
 - [ ] **Phase 5:** Slack channel, skills, evals
 - [ ] **Phase 6:** WhatsApp channel + job application dashboard
 - [ ] **Phase 7:** cloud deployment
