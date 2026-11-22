@@ -30,19 +30,21 @@ from fuse.google.auth import TokenStore
 from fuse.google.drafts import GmailDraftSink
 from fuse.google.reader import GoogleApiReader, GoogleReader
 from fuse.google.tools import make_google_tools
-from fuse.llm import build_llm
+from fuse.llm import build_llm, build_structured_llm
 from fuse.logging_setup import configure_logging
 from fuse.memory.commands import forget_text, list_memories_text
 from fuse.memory.embeddings import FastEmbedder
 from fuse.memory.store import MemoryStore, PostgresMemoryStore
 from fuse.memory.tools import make_memory_tools
+from fuse.proactive.alerts import AlertActions, AlertSender, EventHeldItems
 from fuse.proactive.brief import MorningBrief
+from fuse.proactive.decide import DecisionEngine, TriageResult
 from fuse.proactive.events import PostgresEventStore
 from fuse.proactive.gmail_watch import GmailWatcher
 from fuse.proactive.jobs import PostgresJobLog
 from fuse.proactive.notify import TelegramNotifier
 from fuse.proactive.schedule import Scheduler, SystemClock, parse_hhmm
-from fuse.proactive.store import PostgresCursorStore
+from fuse.proactive.store import MuteStore, PostgresCursorStore, PostgresMuteStore
 from fuse.tools.basic import make_basic_tools
 from fuse.tools.drafts import DraftSink, LocalDraftSink, make_draft_tools
 from fuse.tracing import enable_tracing
@@ -164,6 +166,41 @@ async def on_brief(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await brief.run()
 
 
+async def on_alert_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Draft reply / Dismiss / Mute sender, tapped on a proactive alert."""
+    query = update.callback_query
+    if query is None or update.effective_chat is None:
+        return
+    settings: Settings = context.application.bot_data["settings"]
+    if not is_allowed(update.effective_chat.id, settings.telegram_allowed_chat_id):
+        await query.answer()
+        return
+    await query.answer()
+    await query.edit_message_reply_markup(reply_markup=None)  # each alert is handled once
+    actions: AlertActions = context.application.bot_data["alert_actions"]
+    try:
+        reply = await actions.handle(query.data or "", thread_id_for(update.effective_chat.id))
+    except Exception:
+        log.exception("alert button failed")
+        reply = AgentReply("text", "Something went wrong on my side. Check the terminal logs.")
+    await send_reply(update, reply)
+
+
+async def on_unmute(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/unmute <address>: get alerts from a sender again."""
+    mutes: MuteStore = context.application.bot_data["mutes"]
+    address = " ".join(context.args or []).strip()
+    if not address:
+        muted = sorted(await mutes.all())
+        text = "Muted: " + ", ".join(muted) if muted else "You haven't muted anyone."
+        text += "\nUsage: /unmute name@example.com" if muted else ""
+    elif await mutes.unmute(address):
+        text = f"Unmuted {address}."
+    else:
+        text = f"{address} wasn't muted."
+    await update.effective_chat.send_message(text)  # type: ignore[union-attr]
+
+
 async def on_memories(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/memories: show everything Fuse remembers about you."""
     memory: MemoryStore = context.application.bot_data["memory"]
@@ -176,6 +213,78 @@ async def on_forget(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     memory: MemoryStore = context.application.bot_data["memory"]
     text = await forget_text(memory, " ".join(context.args or []))
     await update.effective_chat.send_message(text)  # type: ignore[union-attr]
+
+
+async def setup_proactive(
+    app: Application,
+    settings: Settings,
+    pool: Any,
+    google: GoogleApiReader | None,
+    memory: MemoryStore,
+) -> None:
+    """Everything Fuse does on its own: the brief, the Gmail watcher, triage and alerts.
+
+    All of it runs from one scheduler tick, so there is a single place to turn it off
+    (PROACTIVE_ENABLED=false) and a single loop to reason about.
+    """
+    runner: AgentRunner = app.bot_data["runner"]
+    chat_id = settings.telegram_allowed_chat_id
+    clock = SystemClock(settings.user_timezone)
+    notifier = TelegramNotifier(app.bot, chat_id)
+
+    async def add_to_conversation(text: str) -> None:
+        await runner.add_note(thread_id_for(chat_id), text)
+
+    job_log = PostgresJobLog(pool)
+    events = PostgresEventStore(pool)
+    mutes = PostgresMuteStore(pool)
+    cursors = PostgresCursorStore(pool)
+    for store in (job_log, events, mutes, cursors):
+        await store.ensure_schema()
+
+    brief = MorningBrief(
+        clock,
+        notifier,
+        build_llm(settings),
+        google,
+        memory,
+        held=EventHeldItems(events),
+        on_sent=add_to_conversation,
+    )
+    scheduler = Scheduler(clock, job_log)
+    scheduler.add_daily("morning_brief", parse_hhmm(settings.brief_time), brief.run)
+
+    if google is not None:
+
+        async def on_new_email(summary: dict[str, Any]) -> None:
+            await events.add("email", f"gmail:{summary['id']}", summary)
+
+        watcher = GmailWatcher(google, cursors, on_new_email, notifier, clock, job_log)
+        engine = DecisionEngine(
+            events,
+            mutes,
+            build_structured_llm(settings, TriageResult),
+            clock,
+            AlertSender(notifier, on_sent=add_to_conversation),
+            quiet_start=parse_hhmm(settings.quiet_hours_start),
+            quiet_end=parse_hhmm(settings.quiet_hours_end),
+            max_alerts_per_hour=settings.max_alerts_per_hour,
+            memory=memory,
+        )
+        scheduler.add_interval(
+            "gmail_watch", timedelta(seconds=settings.gmail_poll_seconds), watcher.poll
+        )
+        scheduler.add_interval("decide", timedelta(seconds=TICK_SECONDS), engine.process)
+
+    app.bot_data.update(
+        brief=brief,
+        scheduler=scheduler,
+        mutes=mutes,
+        alert_actions=AlertActions(events, mutes, runner),
+    )
+    if settings.proactive_enabled and app.job_queue is not None:
+        app.job_queue.run_repeating(on_tick, interval=TICK_SECONDS, first=15, name="tick")
+        log.info("Proactive jobs on (timezone %s)", settings.user_timezone)
 
 
 def build_application(settings: Settings) -> Application:
@@ -212,41 +321,7 @@ def build_application(settings: Settings) -> Application:
         app.bot_data["settings"] = settings
         app.bot_data["memory"] = memory
 
-        runner: AgentRunner = app.bot_data["runner"]
-        chat_id = settings.telegram_allowed_chat_id
-        clock = SystemClock(settings.user_timezone)
-        notifier = TelegramNotifier(app.bot, chat_id)
-
-        async def add_to_conversation(text: str) -> None:
-            await runner.add_note(thread_id_for(chat_id), text)
-
-        brief = MorningBrief(
-            clock, notifier, build_llm(settings), google, memory, on_sent=add_to_conversation
-        )
-        app.bot_data["brief"] = brief
-
-        job_log = PostgresJobLog(pool)
-        await job_log.ensure_schema()
-        scheduler = Scheduler(clock, job_log)
-        scheduler.add_daily("morning_brief", parse_hhmm(settings.brief_time), brief.run)
-
-        events = PostgresEventStore(pool)
-        await events.ensure_schema()
-        app.bot_data["events"] = events
-        if google is not None:
-            cursors = PostgresCursorStore(pool)
-            await cursors.ensure_schema()
-
-            async def on_new_email(summary: dict[str, Any]) -> None:
-                await events.add("email", f"gmail:{summary['id']}", summary)
-
-            watcher = GmailWatcher(google, cursors, on_new_email, notifier, clock, job_log)
-            every = timedelta(seconds=settings.gmail_poll_seconds)
-            scheduler.add_interval("gmail_watch", every, watcher.poll)
-        app.bot_data["scheduler"] = scheduler
-        if settings.proactive_enabled and app.job_queue is not None:
-            app.job_queue.run_repeating(on_tick, interval=TICK_SECONDS, first=15, name="tick")
-            log.info("Proactive jobs on (timezone %s)", settings.user_timezone)
+        await setup_proactive(app, settings, pool, google, memory)
         log.info("Agent ready; conversations are stored in Postgres")
 
     async def on_shutdown(app: Application) -> None:
@@ -264,7 +339,9 @@ def build_application(settings: Settings) -> Application:
     app.add_handler(CommandHandler("brief", on_brief, filters=only_me))
     app.add_handler(CommandHandler("memories", on_memories, filters=only_me))
     app.add_handler(CommandHandler("forget", on_forget, filters=only_me))
+    app.add_handler(CommandHandler("unmute", on_unmute, filters=only_me))
     app.add_handler(CallbackQueryHandler(on_button, pattern=r"^(approve|reject):"))
+    app.add_handler(CallbackQueryHandler(on_alert_button, pattern=r"^ev:"))
     return app
 
 

@@ -22,9 +22,9 @@ def test_handlers_are_registered():
     messages = [h for h in handlers if isinstance(h, MessageHandler)]
     buttons = [h for h in handlers if isinstance(h, CallbackQueryHandler)]
     assert len(messages) == 1 and "42" in repr(messages[0].filters)  # locked to your chat
-    assert len(buttons) == 1  # Approve / Reject (checks the chat inside on_button)
+    assert len(buttons) == 2  # Approve/Reject and alert buttons (both check the chat inside)
     commands = {c for h in handlers if isinstance(h, CommandHandler) for c in h.commands}
-    assert commands == {"brief", "memories", "forget"}
+    assert commands == {"brief", "memories", "forget", "unmute"}
     assert all("42" in repr(h.filters) for h in handlers if isinstance(h, CommandHandler))
 
 
