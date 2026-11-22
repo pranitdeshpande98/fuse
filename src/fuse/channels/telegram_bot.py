@@ -42,6 +42,7 @@ from fuse.proactive.decide import DecisionEngine, TriageResult
 from fuse.proactive.events import PostgresEventStore
 from fuse.proactive.gmail_watch import GmailWatcher
 from fuse.proactive.jobs import PostgresJobLog
+from fuse.proactive.meetings import MeetingReminders
 from fuse.proactive.notify import TelegramNotifier
 from fuse.proactive.schedule import Scheduler, SystemClock, parse_hhmm
 from fuse.proactive.store import MuteStore, PostgresCursorStore, PostgresMuteStore
@@ -275,6 +276,21 @@ async def setup_proactive(
             "gmail_watch", timedelta(seconds=settings.gmail_poll_seconds), watcher.poll
         )
         scheduler.add_interval("decide", timedelta(seconds=TICK_SECONDS), engine.process)
+
+        reminders = MeetingReminders(
+            google,
+            events,
+            notifier,
+            clock,
+            settings.meeting_reminder_minutes,
+            memory,
+            on_sent=add_to_conversation,
+        )
+        # Checking at least once per window means no meeting can slip between two checks.
+        window = timedelta(minutes=settings.meeting_reminder_minutes)
+        scheduler.add_interval(
+            "meeting_reminders", min(timedelta(minutes=5), window), reminders.check
+        )
 
     app.bot_data.update(
         brief=brief,
