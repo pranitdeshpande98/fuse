@@ -185,3 +185,50 @@ def _later(**delta):
     from datetime import UTC, datetime
 
     return datetime.now(UTC) + timedelta(**delta)
+
+
+async def test_task_approval_buttons_resume_the_task_end_to_end():
+    """Worker pauses -> buttons on Telegram -> your tap (handled by the bot) -> worker resumes."""
+    from fuse.proactive.notify import RecordingNotifier
+    from fuse.tasks.report import TelegramTaskReporter, decide_task_approval
+
+    actions, sink, notifier = InMemoryActionStore(), LocalDraftSink(), RecordingNotifier()
+    draft = {"to": "pat@acme.com", "subject": "Re: Friday", "body": "Monday works."}
+    model = FlakyModel(script=[tool_call("draft_email_reply", draft), AIMessage("Done.")])
+    runner = AgentRunner(build_graph(model, make_draft_tools(actions, sink), InMemorySaver()))
+    tasks = InMemoryTaskStore()
+    worker = Worker(tasks, runner, TelegramTaskReporter(notifier), worker_id="w1")
+    task = await tasks.create("reply to Pat")
+
+    await worker.run_one()
+    text, buttons = notifier.sent[-1]
+    assert "To: pat@acme.com" in text
+    assert [b.label for b in buttons] == ["Approve", "Reject"]
+
+    assert await decide_task_approval(tasks, "tk:approve:999:abc") == (
+        "This is no longer waiting for approval."
+    )
+    reply = await decide_task_approval(tasks, buttons[0].data)
+    assert reply == f"Approved. Task #{task.id} continues."
+    assert "no longer waiting" in await decide_task_approval(tasks, buttons[1].data)  # once
+
+    await worker.run_one()
+    assert len(sink.drafts) == 1
+    assert notifier.texts[-1].endswith("Done.")
+
+
+async def test_rejecting_a_task_action_lets_the_task_finish_without_it():
+    from fuse.proactive.notify import RecordingNotifier
+    from fuse.tasks.report import TelegramTaskReporter, decide_task_approval
+
+    actions, sink, notifier = InMemoryActionStore(), LocalDraftSink(), RecordingNotifier()
+    draft = {"to": "pat@acme.com", "subject": "Hi", "body": "x"}
+    model = FlakyModel(script=[tool_call("draft_email_reply", draft), AIMessage("Skipped it.")])
+    runner = AgentRunner(build_graph(model, make_draft_tools(actions, sink), InMemorySaver()))
+    tasks = InMemoryTaskStore()
+    worker = Worker(tasks, runner, TelegramTaskReporter(notifier), worker_id="w1")
+    task = await tasks.create("reply")
+    await worker.run_one()
+    await decide_task_approval(tasks, notifier.sent[-1][1][1].data)
+    await worker.run_one()
+    assert sink.drafts == [] and (await tasks.get(task.id)).status == "done"

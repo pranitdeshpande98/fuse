@@ -41,7 +41,7 @@ from fuse.proactive.schedule import Scheduler, SystemClock, parse_hhmm
 from fuse.proactive.store import MuteStore, PostgresCursorStore, PostgresMuteStore
 from fuse.services import open_services
 from fuse.tasks.queue import TaskStore
-from fuse.tasks.report import cancel_text, tasks_text
+from fuse.tasks.report import cancel_text, decide_task_approval, tasks_text
 from fuse.tasks.tools import make_task_tools, start_task
 from fuse.tracing import enable_tracing
 
@@ -159,6 +159,22 @@ async def on_alert_button(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         log.exception("alert button failed")
         reply = AgentReply("text", "Something went wrong on my side. Check the terminal logs.")
     await send_reply(update, reply)
+
+
+async def on_task_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Approve / Reject on something a background task wants to do. The bot only records
+    your decision in Postgres; the worker, a separate process, resumes the task."""
+    query = update.callback_query
+    if query is None or update.effective_chat is None:
+        return
+    settings: Settings = context.application.bot_data["settings"]
+    if not is_allowed(update.effective_chat.id, settings.telegram_allowed_chat_id):
+        await query.answer()
+        return
+    text = await decide_task_approval(context.application.bot_data["tasks"], query.data or "")
+    await query.answer(text[:200])
+    await query.edit_message_reply_markup(reply_markup=None)
+    await update.effective_chat.send_message(text)
 
 
 async def on_unmute(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -352,6 +368,7 @@ def build_application(settings: Settings) -> Application:
     app.add_handler(CommandHandler("unmute", on_unmute, filters=only_me))
     app.add_handler(CallbackQueryHandler(on_button, pattern=r"^(approve|reject):"))
     app.add_handler(CallbackQueryHandler(on_alert_button, pattern=r"^ev:"))
+    app.add_handler(CallbackQueryHandler(on_task_button, pattern=r"^tk:"))
     return app
 
 

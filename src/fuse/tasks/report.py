@@ -2,8 +2,49 @@
 
 from datetime import timedelta
 
-from fuse.proactive.notify import Notifier, split_message
+from fuse.proactive.notify import Button, Notifier, split_message
 from fuse.tasks.queue import Task, TaskStore
+
+TASK_BUTTON = "tk"
+KEY_CHARS = 16  # enough of the action key to match it; Telegram allows 64 bytes per button
+
+
+def task_buttons(task_id: int, approval: dict) -> list[Button]:
+    key = approval["action_key"][:KEY_CHARS]
+    return [
+        Button("Approve", f"{TASK_BUTTON}:approve:{task_id}:{key}"),
+        Button("Reject", f"{TASK_BUTTON}:reject:{task_id}:{key}"),
+    ]
+
+
+def parse_task_button(data: str) -> tuple[str, int, str] | None:
+    """'tk:approve:7:ab12…' -> ('approve', 7, 'ab12…'), or None if it isn't one."""
+    parts = data.split(":")
+    if len(parts) != 4 or parts[0] != TASK_BUTTON or not parts[2].isdigit():
+        return None
+    return parts[1], int(parts[2]), parts[3]
+
+
+async def decide_task_approval(tasks: TaskStore, data: str) -> str:
+    """Your tap on a task's approval button. The worker picks the task up again within
+    a couple of seconds and continues from where it paused."""
+    parsed = parse_task_button(data)
+    if parsed is None:
+        return "That button isn't valid any more."
+    choice, task_id, key_prefix = parsed
+    task = await tasks.get(task_id)
+    pending = (task.pending or {}) if task else {}
+    full_key = pending.get("action_key", "")
+    if not task or task.status != "waiting_approval" or not full_key.startswith(key_prefix):
+        return "This is no longer waiting for approval."
+    approved = choice in ("approve", "send", "draft")
+    decision: dict = {"approved": approved}
+    if choice in ("send", "draft"):
+        decision["mode"] = choice
+    if not await tasks.submit_decision(task_id, full_key, decision):
+        return "This is no longer waiting for approval."
+    return f"{'Approved' if approved else 'Rejected'}. Task #{task_id} continues."
+
 
 STATUS_LABEL = {
     "queued": "queued",
@@ -31,8 +72,8 @@ class TelegramTaskReporter:
         await self._notifier.send(f"Task #{task_id}: {text}")
 
     async def needs_approval(self, task: Task, approval: dict) -> None:
-        # Replaced in the next step with Approve / Reject buttons.
-        await self._notifier.send(f"Task #{task.id} needs your approval:\n\n{approval['preview']}")
+        text = f"Task #{task.id} would like to do this:\n\n{approval['preview']}"
+        await self._notifier.send(text, task_buttons(task.id, approval))
 
     async def finished(self, task: Task, result: str) -> None:
         parts = split_message(f"Task #{task.id} done: {short(task.goal)}\n\n{result}")
