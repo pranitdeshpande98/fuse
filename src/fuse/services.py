@@ -17,8 +17,10 @@ from fuse.db import open_pool
 from fuse.google.auth import TokenStore
 from fuse.google.drafts import GmailDraftSink
 from fuse.google.reader import GoogleApiReader
+from fuse.jobs.store import PostgresJobStore
 from fuse.memory.embeddings import FastEmbedder
 from fuse.memory.store import PostgresMemoryStore
+from fuse.skills.loader import Skill
 from fuse.tasks.queue import PostgresTaskStore
 
 log = logging.getLogger("fuse.services")
@@ -35,6 +37,8 @@ class Services:
     tokens: TokenStore | None
     tasks: PostgresTaskStore
     contacts: PostgresContactStore
+    jobs: PostgresJobStore
+    skills: list[Skill]
 
 
 @asynccontextmanager

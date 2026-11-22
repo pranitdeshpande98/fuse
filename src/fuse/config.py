@@ -86,6 +86,9 @@ class Settings(BaseSettings):
         parse_hhmm(value)  # raises a clear error for anything that isn't HH:MM
         return value
 
+    # Skills (phase 5): one folder per skill, each with a SKILL.md
+    skills_dir: str = "skills"
+
     # Web search (phase 4): DuckDuckGo, no API key.
     web_search_enabled: bool = True
 

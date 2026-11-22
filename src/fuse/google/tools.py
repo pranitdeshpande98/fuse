@@ -76,10 +76,15 @@ def _problem(exc: Exception) -> str:
 
 def make_google_tools(reader: GoogleReader) -> list[BaseTool]:
     @tool
-    async def list_calendar_events(days_ahead: int = 1) -> str:
-        """List the user's calendar events from now until `days_ahead` days from now (1-14)."""
+    async def list_calendar_events(days_ahead: int = 1, days_back: int = 0) -> str:
+        """List the user's calendar events from `days_back` days ago (0-14) until
+        `days_ahead` days from now (0-14). For "this past week" use days_back=7, days_ahead=0."""
+        ahead, back = max(0, min(days_ahead, 14)), max(0, min(days_back, 14))
         try:
-            events = await reader.upcoming_events(max(1, min(days_ahead, 14)))
+            if back:
+                events = await reader.events_between(back, ahead)
+            else:
+                events = await reader.upcoming_events(max(1, ahead))
         except (GoogleNotConnected, HttpError) as exc:
             return _problem(exc)
         return format_events(events)

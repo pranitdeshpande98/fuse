@@ -126,3 +126,14 @@ def test_plain_text_is_found_in_nested_parts():
 def test_html_only_email_has_no_plain_text():
     payload = {"mimeType": "text/html", "body": {"data": "PGI-aGk8L2I-"}}
     assert _plain_text(payload) == ""  # the reader then falls back to Gmail's snippet
+
+
+async def test_calendar_can_look_back_for_a_weekly_review():
+    class Reader(FakeReader):
+        async def events_between(self, days_back, days_ahead):
+            self.asked = (days_back, days_ahead)
+            return [{"summary": "Standup", "start": {"dateTime": "2026-11-17T09:00:00-06:00"}}]
+
+    reader = Reader()
+    out = await tools_for(reader)["list_calendar_events"].ainvoke({"days_back": 7, "days_ahead": 0})
+    assert reader.asked == (7, 0) and "Standup" in out

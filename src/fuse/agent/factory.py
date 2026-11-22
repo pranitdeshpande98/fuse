@@ -14,9 +14,13 @@ from fuse.config import Settings
 from fuse.contacts import ContactStore
 from fuse.google.reader import GoogleReader
 from fuse.google.tools import make_google_tools
+from fuse.jobs.store import JobStore
+from fuse.jobs.tools import make_job_tools
 from fuse.llm import build_llm
 from fuse.memory.store import MemoryStore
 from fuse.memory.tools import make_memory_tools
+from fuse.skills.loader import Skill, skills_prompt
+from fuse.skills.tools import make_skill_tools
 from fuse.tools.basic import make_basic_tools
 from fuse.tools.drafts import DraftSink, LocalDraftSink, make_draft_tools
 from fuse.tools.web import make_web_tools
@@ -29,6 +33,8 @@ def build_tools(
     drafts: DraftSink | None = None,
     memory: MemoryStore | None = None,
     contacts: ContactStore | None = None,
+    skills: list[Skill] | None = None,
+    jobs: JobStore | None = None,
 ) -> list[BaseTool]:
     return [
         *make_basic_tools(settings.user_timezone),
@@ -36,6 +42,8 @@ def build_tools(
         *make_draft_tools(actions, drafts or LocalDraftSink(), contacts, google),
         *(make_memory_tools(memory, actions) if memory else []),
         *(make_web_tools() if settings.web_search_enabled else []),
+        *(make_skill_tools(skills) if skills else []),
+        *(make_job_tools(jobs) if jobs else []),
     ]
 
 
@@ -50,8 +58,14 @@ def build_runner(
     system_prompt: str = SYSTEM_PROMPT,
     max_steps: int | None = None,
     contacts: ContactStore | None = None,
+    skills: list[Skill] | None = None,
+    jobs: JobStore | None = None,
 ) -> AgentRunner:
-    tools = [*build_tools(settings, actions, google, drafts, memory, contacts), *extra_tools]
+    tools = [
+        *build_tools(settings, actions, google, drafts, memory, contacts, skills, jobs),
+        *extra_tools,
+    ]
+    system_prompt += skills_prompt(skills or [])
     model = build_llm(settings, tools)
     graph = build_graph(
         model,

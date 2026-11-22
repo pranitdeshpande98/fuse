@@ -238,8 +238,9 @@ def build_application(settings: Settings) -> Application:
             memory,
             extra_tools=make_task_tools(services.tasks, settings.task_max_attempts),
             contacts=services.contacts,
+            skills=services.skills,
+            jobs=services.jobs,
         )
-        app.bot_data["contacts"] = services.contacts
         app.bot_data["tasks"] = services.tasks
         app.bot_data["settings"] = settings
         app.bot_data["memory"] = memory

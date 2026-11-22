@@ -246,6 +246,8 @@ def build_worker(settings, services, tasks: TaskStore, reporter=None) -> "Worker
         system_prompt=TASK_SYSTEM_PROMPT,
         max_steps=settings.task_max_steps,
         contacts=services.contacts,
+        skills=services.skills,
+        jobs=services.jobs,
     )
     return Worker(
         tasks,

@@ -17,6 +17,7 @@ from fuse.google.auth import TokenStore, get_credentials
 
 class GoogleReader(Protocol):
     async def upcoming_events(self, days_ahead: int) -> list[dict[str, Any]]: ...
+    async def events_between(self, days_back: int, days_ahead: int) -> list[dict[str, Any]]: ...
     async def search_messages(self, query: str, max_results: int) -> list[dict[str, str]]: ...
     async def read_thread(self, thread_id: str) -> list[dict[str, str]]: ...
 
@@ -59,15 +60,18 @@ class GoogleApiReader:
         return build(name, version, credentials=creds, cache_discovery=False)
 
     async def upcoming_events(self, days_ahead: int) -> list[dict[str, Any]]:
+        return await self.events_between(0, days_ahead)
+
+    async def events_between(self, days_back: int, days_ahead: int) -> list[dict[str, Any]]:
         calendar = await self._service("calendar", "v3")
         now = datetime.now(UTC)
         request = calendar.events().list(
             calendarId="primary",
-            timeMin=now.isoformat(),
+            timeMin=(now - timedelta(days=days_back)).isoformat(),
             timeMax=(now + timedelta(days=days_ahead)).isoformat(),
             singleEvents=True,  # expand repeating events into individual ones
             orderBy="startTime",
-            maxResults=25,
+            maxResults=50,
         )
         result = await asyncio.to_thread(request.execute)
         return result.get("items", [])
