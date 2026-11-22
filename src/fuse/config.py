@@ -86,6 +86,11 @@ class Settings(BaseSettings):
         parse_hhmm(value)  # raises a clear error for anything that isn't HH:MM
         return value
 
+    # Job Alerts dashboard (phase 6): the Flask app in your autojobalert folder.
+    # Fuse only uses its API; leave empty to turn the integration off.
+    job_alerts_url: str = "http://127.0.0.1:5000"
+    job_alerts_poll_minutes: int = 10  # how often to look for new matches to send you
+
     # Skills (phase 5): one folder per skill, each with a SKILL.md
     skills_dir: str = "skills"
 
