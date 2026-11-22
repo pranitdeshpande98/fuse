@@ -93,3 +93,62 @@ def test_agent_prompt_lists_skills():
     )
     tool_names = set(runner._graph.nodes["tools"].bound.tools_by_name)
     assert "use_skill" in tool_names
+
+
+def test_schedules():
+    from datetime import time
+
+    from fuse.skills.loader import describe_schedule, parse_schedule
+
+    assert parse_schedule("fri 17:00") == (frozenset({4}), time(17, 0))
+    assert parse_schedule("mon,wed 08:30")[0] == frozenset({0, 2})
+    assert parse_schedule("weekdays 09:00")[0] == frozenset(range(5))
+    assert describe_schedule("fri 17:00") == "Fri at 17:00"
+    assert describe_schedule("daily 07:00") == "every day at 07:00"
+    for bad in ["friday at 5", "fri 25:00", "funday 10:00"]:
+        with pytest.raises(SkillError):
+            parse_schedule(bad)
+    with pytest.raises(SkillError, match="schedule"):
+        parse_skill(GOOD.replace("fri 17:00", "fridays"), "weekly-review")
+
+
+async def test_a_scheduled_skill_runs_on_its_day_only_once():
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from fuse.proactive.jobs import InMemoryJobLog
+    from fuse.proactive.schedule import FixedClock, Scheduler
+    from fuse.skills.loader import parse_schedule
+    from fuse.skills.tools import start_skill
+    from fuse.tasks.queue import InMemoryTaskStore
+
+    tasks, skills = InMemoryTaskStore(), load_skills(REPO_SKILLS)
+    clock = FixedClock(datetime(2026, 11, 26, 17, 5, tzinfo=ZoneInfo("America/Chicago")))  # Thu
+    scheduler = Scheduler(clock, InMemoryJobLog())
+    days, at = parse_schedule("fri 17:00")
+    scheduler.add_daily(
+        "skill:weekly-review",
+        at,
+        lambda: start_skill(tasks, skills, "weekly-review"),
+        weekdays=days,
+    )
+    await scheduler.tick()
+    assert await tasks.recent() == []  # Thursday: not its day
+    clock.advance(days=1)  # Friday 17:05
+    await scheduler.tick()
+    await scheduler.tick()
+    (task,) = await tasks.recent()
+    assert "use_skill('weekly-review')" in task.goal
+
+
+async def test_skill_commands():
+    from fuse.skills.tools import skills_text, start_skill
+    from fuse.tasks.queue import InMemoryTaskStore
+
+    skills = load_skills(REPO_SKILLS)
+    text = skills_text(skills)
+    assert "weekly-review" in text and "[runs Fri at 17:00]" in text
+    tasks = InMemoryTaskStore()
+    assert "Started background task" in await start_skill(tasks, skills, "interview-prep")
+    assert "No skill called" in await start_skill(tasks, skills, "nope")
+    assert "Usage" in await start_skill(tasks, skills, " ")

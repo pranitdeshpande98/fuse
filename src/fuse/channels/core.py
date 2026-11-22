@@ -13,11 +13,14 @@ from dataclasses import dataclass, field
 from fuse.agent.runner import AgentReply, AgentRunner
 from fuse.approval_ui import after_allowing, approval_buttons, approval_text
 from fuse.contacts import ContactStore, contacts_text
+from fuse.jobs.store import JobStore, jobs_text
 from fuse.memory.commands import forget_text, list_memories_text
 from fuse.memory.store import MemoryStore
 from fuse.proactive.alerts import AlertActions
 from fuse.proactive.notify import Button, split_message
 from fuse.proactive.store import MuteStore
+from fuse.skills.loader import Skill
+from fuse.skills.tools import skills_text, start_skill
 from fuse.tasks.queue import TaskStore
 from fuse.tasks.report import (
     TASK_BUTTON,
@@ -66,10 +69,13 @@ class ChatCore:
         alert_actions: AlertActions | None = None,
         brief: Callable[[], Awaitable[None]] | None = None,
         task_max_attempts: int = 3,
+        skills: list[Skill] | None = None,
+        jobs: JobStore | None = None,
     ) -> None:
         self.runner, self.memory, self.tasks = runner, memory, tasks
         self.contacts, self.mutes, self.alert_actions = contacts, mutes, alert_actions
         self.brief, self.task_max_attempts = brief, task_max_attempts
+        self.skills, self.jobs = skills or [], jobs
         self.commands: dict[str, Command] = {
             "brief": Command("today's brief, now", self._brief),
             "task": Command("start a background task: /task <goal>", self._task),
@@ -79,6 +85,9 @@ class ChatCore:
             "memories": Command("everything Fuse remembers about you", self._memories),
             "forget": Command("delete a memory: /forget <id>", self._forget),
             "unmute": Command("alerts from a sender again: /unmute [address]", self._unmute),
+            "skills": Command("your skills and when they run", self._skills),
+            "skill": Command("run a skill now: /skill <name>", self._skill),
+            "jobs": Command("your job applications", self._jobs),
         }
 
     # --- rendering ---------------------------------------------------------------------
@@ -205,6 +214,19 @@ class ChatCore:
             return self._one("Memory isn't set up.")
         return self._one(await forget_text(self.memory, args))
 
+    async def _skills(self, thread_id: str, args: str) -> list[Outgoing]:
+        return self._one(skills_text(self.skills))
+
+    async def _skill(self, thread_id: str, args: str) -> list[Outgoing]:
+        if self.tasks is None:
+            return self._one("Background tasks aren't set up.")
+        return self._one(await start_skill(self.tasks, self.skills, args, self.task_max_attempts))
+
+    async def _jobs(self, thread_id: str, args: str) -> list[Outgoing]:
+        if self.jobs is None:
+            return self._one("The job tracker isn't set up.")
+        return self._one(await jobs_text(self.jobs))
+
     async def _unmute(self, thread_id: str, args: str) -> list[Outgoing]:
         if self.mutes is None:
             return self._one("Alerts aren't set up.")
@@ -219,6 +241,9 @@ class ChatCore:
 
 
 COMMAND_NAMES = (
+    "skills",
+    "skill",
+    "jobs",
     "brief",
     "task",
     "tasks",

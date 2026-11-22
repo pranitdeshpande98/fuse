@@ -22,6 +22,7 @@ progressive disclosure.
 import logging
 import re
 from dataclasses import dataclass
+from datetime import time
 from pathlib import Path
 
 log = logging.getLogger("fuse.skills")
@@ -31,6 +32,39 @@ NAME = re.compile(r"^[a-z0-9][a-z0-9-]{1,48}$")
 
 class SkillError(ValueError):
     pass
+
+
+DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+
+
+def parse_schedule(text: str) -> tuple[frozenset[int], time]:
+    """'fri 17:00' -> ({4}, 17:00). Days: daily, weekdays, weekends, or names like mon,wed."""
+    try:
+        days_part, clock = text.strip().lower().rsplit(" ", 1)
+        hours, minutes = clock.split(":")
+        at = time(int(hours), int(minutes))
+    except ValueError:
+        raise SkillError(f"schedule {text!r} should look like 'fri 17:00'") from None
+    named = {"daily": range(7), "weekdays": range(5), "weekends": range(5, 7)}
+    if days_part in named:
+        return frozenset(named[days_part]), at
+    days = set()
+    for day in days_part.replace(" ", "").split(","):
+        if day not in DAYS:
+            raise SkillError(f"unknown day {day!r} in schedule; use mon, tue, ... or daily")
+        days.add(DAYS.index(day))
+    return frozenset(days), at
+
+
+def describe_schedule(text: str) -> str:
+    days, at = parse_schedule(text)
+    if days == frozenset(range(7)):
+        when = "every day"
+    elif days == frozenset(range(5)):
+        when = "weekdays"
+    else:
+        when = ", ".join(DAYS[d].capitalize() for d in sorted(days))
+    return f"{when} at {at:%H:%M}"
 
 
 @dataclass(frozen=True)
@@ -65,7 +99,10 @@ def parse_skill(text: str, folder_name: str = "") -> Skill:
         raise SkillError("a description is required: it's how the agent knows when to use it")
     if not body.strip():
         raise SkillError("the skill has no instructions")
-    return Skill(name, description, body.strip(), fields.get("schedule", ""))
+    schedule = fields.get("schedule", "")
+    if schedule:
+        parse_schedule(schedule)  # a bad schedule is reported now, not silently never run
+    return Skill(name, description, body.strip(), schedule)
 
 
 def load_skills(directory: str | Path) -> list[Skill]:

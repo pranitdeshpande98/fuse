@@ -42,6 +42,8 @@ from fuse.proactive.notify import TelegramNotifier, telegram_markup
 from fuse.proactive.schedule import Scheduler, SystemClock, parse_hhmm
 from fuse.proactive.store import PostgresCursorStore, PostgresMuteStore
 from fuse.services import open_services
+from fuse.skills.loader import describe_schedule, parse_schedule
+from fuse.skills.tools import start_skill
 from fuse.tasks.tools import make_task_tools
 from fuse.tracing import enable_tracing
 
@@ -203,6 +205,20 @@ async def setup_proactive(
         )
 
     services = app.bot_data.get("services")
+    if services is not None:
+        for skill in services.skills:
+            if not skill.schedule:
+                continue
+            days, at = parse_schedule(skill.schedule)
+
+            async def run_skill(name: str = skill.name) -> None:
+                text = await start_skill(
+                    services.tasks, services.skills, name, settings.task_max_attempts
+                )
+                log.info("scheduled skill %s: %s", name, text)
+
+            scheduler.add_daily(f"skill:{skill.name}", at, run_skill, weekdays=days)
+            log.info("Skill %s scheduled: %s", skill.name, describe_schedule(skill.schedule))
     app.bot_data.update(
         scheduler=scheduler,
         core=ChatCore(
@@ -214,6 +230,8 @@ async def setup_proactive(
             alert_actions=AlertActions(events, mutes, runner),
             brief=brief.run,
             task_max_attempts=settings.task_max_attempts,
+            skills=services.skills if services else None,
+            jobs=services.jobs if services else None,
         ),
     )
     if settings.proactive_enabled and app.job_queue is not None:

@@ -77,8 +77,11 @@ class DailyJob:
     at: time
     run: JobFn
     catch_up: timedelta = timedelta(hours=4)  # still run if missed by up to this long
+    weekdays: frozenset[int] | None = None  # 0 = Monday; None = every day
 
     def is_due(self, now: datetime) -> bool:
+        if self.weekdays is not None and now.weekday() not in self.weekdays:
+            return False
         scheduled = datetime.combine(now.date(), self.at, tzinfo=now.tzinfo)
         return scheduled <= now < scheduled + self.catch_up
 
@@ -102,8 +105,17 @@ class Scheduler:
         self.daily: list[DailyJob] = []
         self.interval: list[IntervalJob] = []
 
-    def add_daily(self, name: str, at: time, run: JobFn, catch_up: timedelta | None = None) -> None:
-        job = DailyJob(name, at, run) if catch_up is None else DailyJob(name, at, run, catch_up)
+    def add_daily(
+        self,
+        name: str,
+        at: time,
+        run: JobFn,
+        catch_up: timedelta | None = None,
+        weekdays: frozenset[int] | None = None,
+    ) -> None:
+        job = DailyJob(name, at, run, weekdays=weekdays)
+        if catch_up is not None:
+            job.catch_up = catch_up
         self.daily.append(job)
 
     def add_interval(self, name: str, every: timedelta, run: JobFn) -> None:
