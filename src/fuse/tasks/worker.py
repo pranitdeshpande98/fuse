@@ -15,6 +15,7 @@ import asyncio
 import contextlib
 import logging
 import os
+import random
 import socket
 from dataclasses import dataclass
 from datetime import timedelta
@@ -24,6 +25,7 @@ import httpx
 import openai
 
 from fuse.agent.runner import AgentReply, AgentRunner
+from fuse.tasks.budget import BudgetExceeded, TokenBudget
 from fuse.tasks.queue import Task, TaskStore
 
 log = logging.getLogger("fuse.worker")
@@ -99,22 +101,28 @@ class Worker:
         timeout: timedelta = timedelta(minutes=15),
         retry_base: timedelta = timedelta(seconds=30),
         poll_seconds: float = 2.0,
+        max_tokens: int | None = None,
     ) -> None:
         self.tasks, self.runner = tasks, runner
         self.reporter = reporter or LogReporter()
         self.id = worker_id or default_worker_id()
         self.lease, self.timeout = lease, timeout
         self.retry_base, self.poll_seconds = retry_base, poll_seconds
+        self.max_tokens = max_tokens
 
     async def _drive(self, task: Task) -> AgentReply:
         """Start, resume after an approval, or continue after a crash."""
         thread = task.thread_id
+        # The token budget counts this run only: a task resumed after an approval or a
+        # retry gets a fresh budget, so the limit is "per run", not "per task".
+        callbacks = [TokenBudget(self.max_tokens)] if self.max_tokens else None
         if task.resume_with is not None:
-            return await self.runner.resume_with(thread, task.resume_with)
+            return await self.runner.resume_with(thread, task.resume_with, callbacks)
         if await self.runner.has_history(thread):
-            return await self.runner.continue_run(thread)
+            return await self.runner.continue_run(thread, callbacks)
         await self.reporter.started(task)
-        return await self.runner.send(thread, TASK_PROMPT.format(id=task.id, goal=task.goal))
+        prompt = TASK_PROMPT.format(id=task.id, goal=task.goal)
+        return await self.runner.send(thread, prompt, callbacks)
 
     async def _keep_lease(self, task: Task, work: asyncio.Task, flags: _Flags) -> None:
         """Renew the lease while the task runs; stop the work if you cancel it or if this
@@ -161,6 +169,9 @@ class Worker:
             minutes = int(self.timeout.total_seconds() // 60)
             await self._fail(task, f"It took longer than {minutes} minutes, so I stopped it.")
             return True
+        except BudgetExceeded as exc:
+            await self._fail(task, f"It {exc}, so I stopped it.")
+            return True
         except TRANSIENT_ERRORS as exc:
             await self._retry_or_fail(task, f"{type(exc).__name__}: {exc}")
             return True
@@ -191,7 +202,9 @@ class Worker:
         if task.attempts >= task.max_attempts:
             await self._fail(task, f"The model kept failing ({error}). I gave up.")
             return
-        delay = self.retry_base * (2 ** (task.attempts - 1))  # 30 s, 60 s, 120 s, ...
+        # 30 s, 60 s, 120 s, ... plus up to 20% randomness ("jitter"), so several tasks
+        # rate-limited at the same moment don't all retry at the same moment too.
+        delay = self.retry_base * (2 ** (task.attempts - 1)) * (1 + random.random() * 0.2)
         if await self.tasks.retry_later(task.id, self.id, error, delay):
             await self.reporter.retrying(task, error, delay)
 
@@ -238,6 +251,7 @@ def build_worker(settings, services, tasks: TaskStore, reporter=None) -> "Worker
         runner,
         reporter,
         timeout=timedelta(minutes=settings.task_timeout_minutes),
+        max_tokens=settings.task_max_tokens,
     )
 
 

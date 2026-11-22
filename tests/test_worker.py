@@ -98,7 +98,8 @@ async def test_rate_limit_is_retried_later_and_continues_from_the_checkpoint():
     task = await tasks.create("goal")
     await worker.run_one()
     assert (await tasks.get(task.id)).status == "queued"
-    assert recorder.events[-1] == ("retrying", timedelta(seconds=30))
+    kind, delay = recorder.events[-1]
+    assert kind == "retrying" and timedelta(seconds=30) <= delay <= timedelta(seconds=36)
     assert await worker.run_one() is False  # waits for the retry delay
 
     tasks.now = lambda: _later(minutes=1)
@@ -232,3 +233,31 @@ async def test_rejecting_a_task_action_lets_the_task_finish_without_it():
     await decide_task_approval(tasks, notifier.sent[-1][1][1].data)
     await worker.run_one()
     assert sink.drafts == [] and (await tasks.get(task.id)).status == "done"
+
+
+def _usage(tokens: int) -> dict:
+    return {"input_tokens": tokens, "output_tokens": 0, "total_tokens": tokens}
+
+
+async def test_token_budget_stops_an_expensive_task():
+    calls = [
+        AIMessage(
+            "",
+            tool_calls=[{"name": "get_current_time", "args": {"timezone": "UTC"}, "id": f"c{i}"}],
+            usage_metadata=_usage(4000),
+        )
+        for i in range(5)
+    ]
+    worker, tasks, recorder, model = setup(calls, max_tokens=10_000)
+    task = await tasks.create("expensive goal")
+    await worker.run_one()
+    assert (await tasks.get(task.id)).status == "failed"
+    assert "12,000 tokens" in recorder.events[-1][1]
+    assert model.position == 3  # stopped at the call that went over
+
+
+async def test_a_task_within_budget_finishes():
+    worker, tasks, _, _ = setup([AIMessage("ok", usage_metadata=_usage(500))], max_tokens=10_000)
+    task = await tasks.create("cheap goal")
+    await worker.run_one()
+    assert (await tasks.get(task.id)).status == "done"

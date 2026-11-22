@@ -80,6 +80,7 @@ class Settings(BaseSettings):
     task_max_steps: int = 40
     task_timeout_minutes: int = 15
     task_max_attempts: int = 3
+    task_max_tokens: int = 200_000  # per run; free tiers allow roughly 100k-1M a day
 
     # Tracing (step 11): send a record of every agent run to LangSmith for debugging.
     langsmith_tracing: bool = False
