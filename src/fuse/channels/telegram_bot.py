@@ -2,6 +2,8 @@
 
 import logging
 from contextlib import AsyncExitStack
+from datetime import timedelta
+from typing import Any
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
@@ -35,9 +37,12 @@ from fuse.memory.embeddings import FastEmbedder
 from fuse.memory.store import MemoryStore, PostgresMemoryStore
 from fuse.memory.tools import make_memory_tools
 from fuse.proactive.brief import MorningBrief
+from fuse.proactive.events import PostgresEventStore
+from fuse.proactive.gmail_watch import GmailWatcher
 from fuse.proactive.jobs import PostgresJobLog
 from fuse.proactive.notify import TelegramNotifier
 from fuse.proactive.schedule import Scheduler, SystemClock, parse_hhmm
+from fuse.proactive.store import PostgresCursorStore
 from fuse.tools.basic import make_basic_tools
 from fuse.tools.drafts import DraftSink, LocalDraftSink, make_draft_tools
 from fuse.tracing import enable_tracing
@@ -224,6 +229,20 @@ def build_application(settings: Settings) -> Application:
         await job_log.ensure_schema()
         scheduler = Scheduler(clock, job_log)
         scheduler.add_daily("morning_brief", parse_hhmm(settings.brief_time), brief.run)
+
+        events = PostgresEventStore(pool)
+        await events.ensure_schema()
+        app.bot_data["events"] = events
+        if google is not None:
+            cursors = PostgresCursorStore(pool)
+            await cursors.ensure_schema()
+
+            async def on_new_email(summary: dict[str, Any]) -> None:
+                await events.add("email", f"gmail:{summary['id']}", summary)
+
+            watcher = GmailWatcher(google, cursors, on_new_email, notifier, clock, job_log)
+            every = timedelta(seconds=settings.gmail_poll_seconds)
+            scheduler.add_interval("gmail_watch", every, watcher.poll)
         app.bot_data["scheduler"] = scheduler
         if settings.proactive_enabled and app.job_queue is not None:
             app.job_queue.run_repeating(on_tick, interval=TICK_SECONDS, first=15, name="tick")
