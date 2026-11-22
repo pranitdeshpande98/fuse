@@ -18,6 +18,7 @@ from fuse.google.drafts import GmailDraftSink
 from fuse.google.reader import GoogleApiReader
 from fuse.memory.embeddings import FastEmbedder
 from fuse.memory.store import PostgresMemoryStore
+from fuse.tasks.queue import PostgresTaskStore
 
 log = logging.getLogger("fuse.services")
 
@@ -31,6 +32,7 @@ class Services:
     drafts: GmailDraftSink | None
     memory: PostgresMemoryStore
     tokens: TokenStore | None
+    tasks: PostgresTaskStore
 
 
 @asynccontextmanager
@@ -56,4 +58,7 @@ async def open_services(settings: Settings) -> AsyncIterator[Services]:
         memory = PostgresMemoryStore(pool, embedder)
         await memory.ensure_schema()
 
-        yield Services(pool, checkpointer, actions, google, drafts, memory, tokens)
+        tasks = PostgresTaskStore(pool)
+        await tasks.ensure_schema()
+
+        yield Services(pool, checkpointer, actions, google, drafts, memory, tokens, tasks)

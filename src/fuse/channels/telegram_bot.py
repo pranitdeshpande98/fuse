@@ -40,6 +40,8 @@ from fuse.proactive.notify import TelegramNotifier
 from fuse.proactive.schedule import Scheduler, SystemClock, parse_hhmm
 from fuse.proactive.store import MuteStore, PostgresCursorStore, PostgresMuteStore
 from fuse.services import open_services
+from fuse.tasks.queue import TaskStore
+from fuse.tasks.tools import make_task_tools, start_task
 from fuse.tracing import enable_tracing
 
 log = logging.getLogger("fuse.telegram")
@@ -173,6 +175,14 @@ async def on_unmute(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.effective_chat.send_message(text)  # type: ignore[union-attr]
 
 
+async def on_task(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/task <goal>: start a background task directly."""
+    tasks: TaskStore = context.application.bot_data["tasks"]
+    settings: Settings = context.application.bot_data["settings"]
+    text = await start_task(tasks, " ".join(context.args or []), settings.task_max_attempts)
+    await update.effective_chat.send_message(text)  # type: ignore[union-attr]
+
+
 async def on_memories(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/memories: show everything Fuse remembers about you."""
     memory: MemoryStore = context.application.bot_data["memory"]
@@ -292,8 +302,15 @@ def build_application(settings: Settings) -> Application:
         pool, memory, google = services.pool, services.memory, services.google
         checkpointer = services.checkpointer
         app.bot_data["runner"] = build_runner(
-            settings, checkpointer, services.actions, google, services.drafts, memory
+            settings,
+            checkpointer,
+            services.actions,
+            google,
+            services.drafts,
+            memory,
+            extra_tools=make_task_tools(services.tasks, settings.task_max_attempts),
         )
+        app.bot_data["tasks"] = services.tasks
         app.bot_data["settings"] = settings
         app.bot_data["memory"] = memory
         app.bot_data["services"] = services
@@ -316,6 +333,7 @@ def build_application(settings: Settings) -> Application:
     app.add_handler(CommandHandler("brief", on_brief, filters=only_me))
     app.add_handler(CommandHandler("memories", on_memories, filters=only_me))
     app.add_handler(CommandHandler("forget", on_forget, filters=only_me))
+    app.add_handler(CommandHandler("task", on_task, filters=only_me))
     app.add_handler(CommandHandler("unmute", on_unmute, filters=only_me))
     app.add_handler(CallbackQueryHandler(on_button, pattern=r"^(approve|reject):"))
     app.add_handler(CallbackQueryHandler(on_alert_button, pattern=r"^ev:"))
