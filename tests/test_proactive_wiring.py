@@ -71,3 +71,56 @@ async def test_setup_proactive_registers_every_job_and_ticks():
         async with pool.connection() as conn:
             cur = await conn.execute("SELECT value FROM sync_cursors WHERE name = 'gmail'")
             assert (await cur.fetchone())["value"] == "100"  # first poll set the cursor
+
+
+@pytest.mark.skipif(not DB_URL, reason="TEST_DATABASE_URL not set")
+async def test_setup_with_job_alerts_and_scheduled_skills():
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    from fuse.jobalerts.client import JobAlertsClient
+    from fuse.jobalerts.service import ScanRunner
+    from fuse.jobs.store import InMemoryJobStore
+    from fuse.proactive.notify import RecordingNotifier
+    from fuse.skills.loader import load_skills
+    from fuse.tasks.queue import InMemoryTaskStore
+    from tests.fake_job_alerts import FakeJobAlerts
+
+    settings = Settings(
+        _env_file=None,
+        telegram_bot_token="123:fake",
+        telegram_allowed_chat_id=42,
+        llm_primary_api_key="not-used",
+    )
+    app = build_application(settings)
+    fake = FakeJobAlerts()
+    client = JobAlertsClient("http://127.0.0.1:5000", fake.transport())
+    async with open_pool(DB_URL) as pool:
+        async with pool.connection() as conn:
+            await conn.execute("DROP TABLE IF EXISTS sync_cursors")
+        checkpointer = AsyncPostgresSaver(pool)
+        await checkpointer.setup()
+        actions = PostgresActionStore(pool)
+        await actions.ensure_schema()
+        memory = PostgresMemoryStore(pool, HashingEmbedder())
+        await memory.ensure_schema()
+        app.bot_data["runner"] = build_runner(settings, checkpointer, actions, None, None, memory)
+        app.bot_data["services"] = SimpleNamespace(
+            tasks=InMemoryTaskStore(),
+            skills=load_skills(Path(__file__).parent.parent / "skills"),
+            jobs=InMemoryJobStore(),
+            contacts=None,
+            job_alerts=client,
+        )
+        app.bot_data["scan_runner"] = ScanRunner(client, RecordingNotifier())
+
+        await setup_proactive(app, settings, pool, None, memory, checkpointer)
+
+        scheduler = app.bot_data["scheduler"]
+        daily = {j.name for j in scheduler.daily}
+        assert {"skill:weekly-review", "skill:follow-up-nudges"} <= daily
+        assert "job_alerts_matches" in {j.name for j in scheduler.interval}
+        core = app.bot_data["core"]
+        assert core.scan_runner is app.bot_data["scan_runner"]
+        assert core.scan_runner.after is not None  # a scan's matches follow it
+        assert "2 of 3 portals active" in (await core.command("t", "dashboard"))[0].text

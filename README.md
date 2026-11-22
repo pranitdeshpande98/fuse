@@ -33,6 +33,10 @@ Built with LangGraph, open-weight models (via free OpenAI-compatible APIs) and P
 - **Has skills for my job search**: job application tracker, interview prep, follow-up
   nudges (Mondays) and a weekly review (Fridays), written as markdown files Fuse loads
   when they fit. `/jobs` shows the tracker.
+- **Connects to my Job Alerts dashboard** (a separate Flask app that scans cap-exempt
+  employers' careers portals): `/scan` from my phone starts a scan, new matches arrive on
+  Telegram with a *Track* button (and by email, as before), and `/dashboard` shows which
+  portals are failing.
 - **Runs on free tiers**: up to three providers in a fallback chain, and a smaller model
   for high-volume background work so the big model's daily quota goes to my chats.
 - **Is measured**: `uv run fuse-evals` checks memory recall, email triage and 12 agent
@@ -208,7 +212,7 @@ and a scheduled skill runs as a background task (catching up if the laptop was a
 | weekly-review | Meetings, emails still owed, job search changes, next week | Fri 17:00 |
 
 The tracker is a table (`job_applications`) with a stage history; it's what the job
-dashboard will read in Phase 6.
+dashboard's *Track* button writes to.
 
 ## Evals
 
@@ -227,6 +231,25 @@ blocked recipient sends nothing" and "a saved draft is never reported as sent".
 retries politely on rate limits, stops at a token cap (`--max-tokens`), saves results to
 `evals/results/`, and exits 1 if anything that passed last run now fails. CI runs the
 harness offline with a scripted ideal agent, plus known-bad scripts that must fail.
+
+## Job Alerts: finding jobs vs tracking applications
+
+Job Alerts (its own project, in another folder) finds jobs: it scans 100+ careers portals
+daily at 17:30 and emails new tech and SAP matches. Fuse tracks applications. They talk only
+through Job Alerts' JSON API (`/api/state`, `/api/matches`, `/api/scan`), so neither project
+reads the other's database and each can change inside without breaking the other.
+
+- **`/scan`** (or "scan for jobs now") starts a scan in the background and replies at once;
+  a scan takes minutes. The summary follows, and Job Alerts emails the new matches itself.
+- **New matches on Telegram:** every 10 minutes and right after a scan, Fuse asks for matches
+  newer than the last one it reported (a cursor, like the Gmail watcher). Each job is stored
+  under its Job Alerts key, so you never hear about the same one twice. The first run starts
+  from now rather than sending 3,000 old jobs.
+- **Track** adds a match to `job_applications` as *interested*, with its link. The tracker
+  skill moves it to *applied* when the confirmation email arrives; the weekly review lists
+  the week's best new matches.
+- **Not running?** Every tool and command says how to start it (`start.bat`) instead of
+  failing; the watcher just stays quiet.
 
 ## Safety, by design
 
@@ -288,8 +311,12 @@ docker compose up -d db       # Postgres + pgvector on 127.0.0.1:55432
 Try: *"What's on my calendar this week?"*, then *"Draft a reply to the latest email from
 Pat saying Friday works."*, then `/brief`.
 
-Commands: `/brief` · `/task <goal>` · `/tasks` · `/cancel <id>` · `/skills` · `/skill <name>` ·
-`/jobs` · `/contacts [add|remove]` · `/memories` · `/forget <id>` · `/unmute [address]`
+Commands: `/brief` · `/scan` · `/dashboard` · `/jobs` · `/task <goal>` · `/tasks` ·
+`/cancel <id>` · `/skills` · `/skill <name>` · `/contacts [add|remove]` · `/memories` ·
+`/forget <id>` · `/unmute [address]`
+
+**Job Alerts:** start it as usual (`start.bat` in its folder). Fuse finds it at
+`JOB_ALERTS_URL` (default `http://127.0.0.1:5000`); leave that empty to turn it off.
 
 **Keep Google signed in:** while your Google Cloud app is in *Testing* mode, Google expires
 the sign-in after 7 days, which stops the brief and alerts (Fuse tells you when it happens).
@@ -298,7 +325,7 @@ use, Google's verification isn't needed.
 
 ## Tests
 
-285 tests. Unit tests use a scripted fake model and fake Google services: no network and no
+305 tests. Unit tests use a scripted fake model and fake Google services: no network and no
 API keys needed. Integration tests run against real Postgres.
 
 ```bash
@@ -323,6 +350,8 @@ Highlights:
 - `test_actions.py`: an action never runs twice, and a failed one can be retried.
 - `test_consolidate.py`: consolidation ignores an email that says "remember…", and never
   saves a fact that conflicts with an existing memory.
+- `test_job_alerts_service.py`: against a fake Job Alerts server: the first check doesn't
+  flood you with old jobs, a match is sent once, a scan reports back and its matches follow.
 - `test_behaviour_evals.py`: the ideal agent passes all 12 scenarios; obeying an injected
   email, claiming a draft was sent, or saving a duplicate memory each fail the right check.
 - `test_core.py`: the channel-neutral core: email to a new person, *Always allow*, *Send*,
@@ -362,6 +391,7 @@ src/fuse/
   channels/     core.py (channel-neutral) · telegram_bot.py (adapter) · whoami.py
   skills/       loader.py (SKILL.md) · tools.py (use_skill, /skills)
   jobs/         store.py (job_applications) · tools.py
+  jobalerts/    client.py (Job Alerts API) · service.py (scan, match watcher) · tools.py
   evals/        world.py (fake inbox/calendar/web) · behaviour.py · cli.py · report.py
   actions.py    actions log + idempotency
   llm.py        provider fallback chain
@@ -401,6 +431,9 @@ tests/          unit + integration tests
   checked addresses are used.
 - **Postgres is a fine queue at this scale:** `SKIP LOCKED` plus leases and fencing gives
   safe concurrent workers without another service to run.
+- **Integrate through the API, not the database:** reading Job Alerts' SQLite file directly
+  would have been quicker, and would break the day its schema changes. Its HTTP API is the
+  contract both projects already rely on.
 - **Free tiers are a design constraint, not an afterthought:** 200k tokens a day goes fast
   once an agent works on its own. Count tokens per task, send volume work to a smaller
   model, keep prompts small (skills load on demand), and pin one model when evaluating.
@@ -419,5 +452,6 @@ tests/          unit + integration tests
   allowlist
 - [x] **Phase 5:** skills (job search), behaviour evals, model routing for free tiers,
   channel-neutral core
-- [ ] **Phase 6:** WhatsApp channel + job application dashboard
+- [x] **Phase 6:** Job Alerts dashboard on Telegram (`/scan`, new matches, Track into the
+  tracker). WhatsApp dropped: Telegram does the job for free.
 - [ ] **Phase 7:** cloud deployment
