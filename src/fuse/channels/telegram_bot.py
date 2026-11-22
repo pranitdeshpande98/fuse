@@ -57,6 +57,8 @@ from fuse.usage import QuotaWatcher
 log = logging.getLogger("fuse.telegram")
 
 TICK_SECONDS = 30  # how often the scheduler checks for due proactive jobs
+TELEGRAM_TIMEOUT = 20.0  # seconds, for connecting to and reading from Telegram
+BOOTSTRAP_RETRIES = 10  # how many times startup retries reaching Telegram before giving up
 
 TELEGRAM_LIMIT = 4000  # Telegram's hard cap is 4096 characters per message
 
@@ -356,6 +358,11 @@ def build_application(settings: Settings) -> Application:
     app = (
         ApplicationBuilder()
         .token(settings.telegram_bot_token.get_secret_value())
+        # The library's 5-second default is short for a home connection; one slow reply
+        # from Telegram shouldn't stop the bot.
+        .connect_timeout(TELEGRAM_TIMEOUT)
+        .read_timeout(TELEGRAM_TIMEOUT)
+        .write_timeout(TELEGRAM_TIMEOUT)
         .post_init(on_startup)
         .post_shutdown(on_shutdown)
         .build()
@@ -380,7 +387,9 @@ def main() -> None:
         )
     log.info("Fuse bot starting; only chat %s is allowed", settings.telegram_allowed_chat_id)
     try:
-        build_application(settings).run_polling()
+        # bootstrap_retries: keep retrying the first calls to Telegram (by default the
+        # library gives up after one timeout, which stopped the bot on a slow network).
+        build_application(settings).run_polling(bootstrap_retries=BOOTSTRAP_RETRIES)
     except Exception:
         log.exception("the bot stopped because of an error")  # into logs\bot.log as well
         raise

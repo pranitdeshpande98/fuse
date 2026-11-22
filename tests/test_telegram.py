@@ -33,3 +33,11 @@ def test_job_queue_is_available():
     """The job-queue extra must be installed, or proactive jobs would silently never run."""
     settings = Settings(_env_file=None, telegram_bot_token="123:fake", telegram_allowed_chat_id=42)
     assert build_application(settings).job_queue is not None
+
+
+def test_telegram_timeouts_are_generous():
+    from fuse.channels.telegram_bot import TELEGRAM_TIMEOUT
+
+    settings = Settings(_env_file=None, telegram_bot_token="123:fake", telegram_allowed_chat_id=42)
+    request = build_application(settings).bot._request[1]
+    assert request.read_timeout == TELEGRAM_TIMEOUT
