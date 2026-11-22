@@ -1,5 +1,6 @@
 from telegram.ext import CallbackQueryHandler, CommandHandler, MessageHandler
 
+from fuse.channels.core import COMMAND_NAMES
 from fuse.channels.telegram_bot import build_application, is_allowed
 from fuse.config import Settings
 
@@ -22,18 +23,9 @@ def test_handlers_are_registered():
     messages = [h for h in handlers if isinstance(h, MessageHandler)]
     buttons = [h for h in handlers if isinstance(h, CallbackQueryHandler)]
     assert len(messages) == 1 and "42" in repr(messages[0].filters)  # locked to your chat
-    assert len(buttons) == 3  # chat approvals, alert buttons, task approvals (all check the chat)
+    assert len(buttons) == 1  # one handler for every button; it checks the chat inside
     commands = {c for h in handlers if isinstance(h, CommandHandler) for c in h.commands}
-    assert commands == {
-        "brief",
-        "memories",
-        "forget",
-        "unmute",
-        "task",
-        "tasks",
-        "cancel",
-        "contacts",
-    }
+    assert commands == set(COMMAND_NAMES)
     assert all("42" in repr(h.filters) for h in handlers if isinstance(h, CommandHandler))
 
 
