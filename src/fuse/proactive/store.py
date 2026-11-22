@@ -57,3 +57,67 @@ class InMemoryCursorStore:
 
     async def set(self, name: str, value: str) -> None:
         self.values[name] = value
+
+
+MUTE_SCHEMA = [
+    """
+    CREATE TABLE IF NOT EXISTS muted_senders (
+        address     TEXT PRIMARY KEY,
+        created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+    """,
+]
+
+
+class MuteStore(Protocol):
+    """Senders you never want alerts from (the "Mute sender" button)."""
+
+    async def mute(self, address: str) -> None: ...
+    async def unmute(self, address: str) -> bool: ...
+    async def all(self) -> set[str]: ...
+
+
+class PostgresMuteStore:
+    def __init__(self, pool: AsyncConnectionPool) -> None:
+        self._pool = pool
+
+    async def ensure_schema(self) -> None:
+        async with self._pool.connection() as conn:
+            for statement in MUTE_SCHEMA:
+                await conn.execute(statement)
+
+    async def mute(self, address: str) -> None:
+        async with self._pool.connection() as conn:
+            await conn.execute(
+                "INSERT INTO muted_senders (address) VALUES (%s) ON CONFLICT DO NOTHING",
+                (address.lower(),),
+            )
+
+    async def unmute(self, address: str) -> bool:
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                "DELETE FROM muted_senders WHERE address = %s", (address.lower(),)
+            )
+            return cur.rowcount > 0
+
+    async def all(self) -> set[str]:
+        async with self._pool.connection() as conn:
+            cur = await conn.execute("SELECT address FROM muted_senders")
+            return {r["address"] for r in await cur.fetchall()}
+
+
+class InMemoryMuteStore:
+    def __init__(self) -> None:
+        self.addresses: set[str] = set()
+
+    async def mute(self, address: str) -> None:
+        self.addresses.add(address.lower())
+
+    async def unmute(self, address: str) -> bool:
+        if address.lower() in self.addresses:
+            self.addresses.discard(address.lower())
+            return True
+        return False
+
+    async def all(self) -> set[str]:
+        return set(self.addresses)
