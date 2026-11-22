@@ -17,6 +17,7 @@ import logging
 import os
 import random
 import socket
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Protocol
@@ -38,6 +39,9 @@ TRANSIENT_ERRORS: tuple[type[BaseException], ...] = (
     openai.InternalServerError,
     httpx.TransportError,
 )
+
+HEARTBEAT_SECONDS = 30
+WORKER_HEARTBEAT = "worker_heartbeat"  # a sync_cursors row: when a worker was last alive
 
 TASK_PROMPT = """Background task #{id}.
 
@@ -102,6 +106,7 @@ class Worker:
         retry_base: timedelta = timedelta(seconds=30),
         poll_seconds: float = 2.0,
         max_tokens: int | None = None,
+        heartbeat: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         self.tasks, self.runner = tasks, runner
         self.reporter = reporter or LogReporter()
@@ -109,6 +114,8 @@ class Worker:
         self.lease, self.timeout = lease, timeout
         self.retry_base, self.poll_seconds = retry_base, poll_seconds
         self.max_tokens = max_tokens
+        self.heartbeat = heartbeat  # lets /status tell whether a worker is alive
+        self._last_beat = 0.0
 
     async def _drive(self, task: Task) -> AgentReply:
         """Start, resume after an approval, or continue after a crash."""
@@ -208,11 +215,22 @@ class Worker:
         if await self.tasks.retry_later(task.id, self.id, error, delay):
             await self.reporter.retrying(task, error, delay)
 
+    async def _beat(self) -> None:
+        now = asyncio.get_running_loop().time()
+        if self.heartbeat is None or now - self._last_beat < HEARTBEAT_SECONDS:
+            return
+        self._last_beat = now
+        try:
+            await self.heartbeat()
+        except Exception:
+            log.warning("couldn't write the worker heartbeat", exc_info=True)
+
     async def run_forever(self, stop: asyncio.Event | None = None) -> None:
         stop = stop or asyncio.Event()
         log.info("worker %s ready", self.id)
         idle_rounds = 0
         while not stop.is_set():
+            await self._beat()
             worked = await self.run_one()
             if worked:
                 idle_rounds = 0
@@ -251,12 +269,22 @@ def build_worker(settings, services, tasks: TaskStore, reporter=None) -> "Worker
         job_alerts=services.job_alerts,
         reminders=services.reminders,
     )
+    from datetime import UTC, datetime
+
+    from fuse.proactive.store import PostgresCursorStore
+
+    cursors = PostgresCursorStore(services.pool)
+
+    async def heartbeat() -> None:
+        await cursors.set(WORKER_HEARTBEAT, datetime.now(UTC).isoformat())
+
     return Worker(
         tasks,
         runner,
         reporter,
         timeout=timedelta(minutes=settings.task_timeout_minutes),
         max_tokens=settings.task_max_tokens,
+        heartbeat=heartbeat,
     )
 
 

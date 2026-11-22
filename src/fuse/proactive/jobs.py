@@ -3,6 +3,7 @@ restarts, and a failed run is retried on the next tick."""
 
 import logging
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
 from typing import Protocol
 
 from psycopg_pool import AsyncConnectionPool
@@ -34,6 +35,10 @@ class JobLog(Protocol):
         ...
 
     async def status(self, job: str, run_key: str) -> str | None: ...
+
+    async def last_done(self, job: str) -> datetime | None:
+        """When this job last finished successfully, for /status."""
+        ...
 
 
 class PostgresJobLog:
@@ -90,12 +95,22 @@ class PostgresJobLog:
             row = await cur.fetchone()
         return row["status"] if row else None
 
+    async def last_done(self, job: str) -> datetime | None:
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                "SELECT max(finished_at) AS at FROM job_runs WHERE job = %s AND status = 'done'",
+                (job,),
+            )
+            row = await cur.fetchone()
+        return row["at"] if row else None
+
 
 class InMemoryJobLog:
     """Same behaviour, for tests."""
 
     def __init__(self) -> None:
         self.runs: dict[tuple[str, str], str] = {}
+        self.finished: dict[str, datetime] = {}
 
     async def run_once(self, job: str, run_key: str, fn: Callable[[], Awaitable[None]]) -> bool:
         if self.runs.get((job, run_key)) in ("running", "done"):
@@ -108,7 +123,11 @@ class InMemoryJobLog:
             self.runs[(job, run_key)] = "failed"
             return False
         self.runs[(job, run_key)] = "done"
+        self.finished[job] = datetime.now(UTC)
         return True
 
     async def status(self, job: str, run_key: str) -> str | None:
         return self.runs.get((job, run_key))
+
+    async def last_done(self, job: str) -> datetime | None:
+        return self.finished.get(job)

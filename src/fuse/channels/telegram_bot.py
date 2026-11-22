@@ -5,6 +5,7 @@ import logging
 from contextlib import AsyncExitStack
 from datetime import timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from telegram import InlineKeyboardMarkup, Update
@@ -47,6 +48,7 @@ from fuse.reminders.service import ReminderSender
 from fuse.services import open_services
 from fuse.skills.loader import describe_schedule, parse_schedule
 from fuse.skills.tools import start_skill
+from fuse.status import StatusDeps, status_report
 from fuse.tasks.tools import make_task_tools
 from fuse.tracing import enable_tracing
 from fuse.usage import QuotaWatcher
@@ -221,6 +223,21 @@ async def setup_proactive(
         )
 
     services = app.bot_data.get("services")
+    status_deps = StatusDeps(
+        tz=ZoneInfo(settings.user_timezone),
+        cursors=cursors,
+        job_log=job_log,
+        tasks=services.tasks if services else None,
+        reminders=services.reminders if services else None,
+        usage=services.usage if services else None,
+        tokens=services.tokens if services else None,
+        job_alerts=services.job_alerts if services else None,
+        quota=settings.llm_daily_token_quota,
+    )
+
+    async def status_check() -> str:
+        return await status_report(status_deps)
+
     scan_runner: ScanRunner | None = app.bot_data.get("scan_runner")
     job_alerts = services.job_alerts if services else None
     if job_alerts is not None:
@@ -269,6 +286,7 @@ async def setup_proactive(
             events=events,
             reminders=services.reminders if services else None,
             clock=clock,
+            status=status_check,
         ),
     )
     if settings.proactive_enabled and app.job_queue is not None:

@@ -85,13 +85,14 @@ class ChatCore:
         events: EventStore | None = None,
         reminders: ReminderStore | None = None,
         clock: Clock | None = None,
+        status: Callable[[], Awaitable[str]] | None = None,
     ) -> None:
         self.runner, self.memory, self.tasks = runner, memory, tasks
         self.contacts, self.mutes, self.alert_actions = contacts, mutes, alert_actions
         self.brief, self.task_max_attempts = brief, task_max_attempts
         self.skills, self.jobs = skills or [], jobs
         self.job_alerts, self.scan_runner, self.events = job_alerts, scan_runner, events
-        self.reminders, self.clock = reminders, clock
+        self.reminders, self.clock, self.status = reminders, clock, status
         self.commands: dict[str, Command] = {
             "brief": Command("today's brief, now", self._brief),
             "task": Command("start a background task: /task <goal>", self._task),
@@ -107,6 +108,7 @@ class ChatCore:
             "scan": Command("scan your Job Alerts portals now", self._scan),
             "dashboard": Command("Job Alerts status and failing portals", self._dashboard),
             "reminders": Command("your upcoming reminders", self._reminders),
+            "status": Command("is every part of Fuse healthy?", self._status),
         }
 
     # --- rendering ---------------------------------------------------------------------
@@ -281,6 +283,11 @@ class ChatCore:
             return self._one("The job tracker isn't set up.")
         return self._one(await jobs_text(self.jobs))
 
+    async def _status(self, thread_id: str, args: str) -> list[Outgoing]:
+        if self.status is None:
+            return self._one("Status isn't available.")
+        return self._one(await self.status())
+
     async def _reminders(self, thread_id: str, args: str) -> list[Outgoing]:
         if self.reminders is None or self.clock is None:
             return self._one("Reminders aren't set up.")
@@ -314,6 +321,7 @@ class ChatCore:
 
 
 COMMAND_NAMES = (
+    "status",
     "reminders",
     "scan",
     "dashboard",
