@@ -1,5 +1,6 @@
 """Telegram channel: passes your messages to the agent and sends back its reply."""
 
+import contextlib
 import logging
 from contextlib import AsyncExitStack
 from datetime import timedelta
@@ -94,10 +95,9 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     result = await core_of(context).button(thread_id, query.data or "")
     await query.answer(result.toast[:200] or None)
     # Buttons work once: they're removed, or replaced (e.g. Send appears after Always allow).
-    try:
+    # BadRequest here means "message is not modified": the buttons were already gone.
+    with contextlib.suppress(BadRequest):
         await query.edit_message_reply_markup(reply_markup=telegram_markup(result.buttons))
-    except BadRequest:
-        pass  # "message is not modified": the buttons were already gone
     await deliver(update, result.messages)
 
 
