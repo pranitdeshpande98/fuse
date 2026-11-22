@@ -115,6 +115,7 @@ async def test_setup_with_job_alerts_and_scheduled_skills():
             job_alerts=client,
             reminders=InMemoryReminderStore(),
             usage=InMemoryUsageStore(),
+            embedder=HashingEmbedder(),
         )
         # Every field the real Services has, so this test breaks if they drift apart.
         from dataclasses import fields

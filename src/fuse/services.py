@@ -19,7 +19,7 @@ from fuse.google.drafts import GmailDraftSink
 from fuse.google.reader import GoogleApiReader
 from fuse.jobalerts.client import JobAlertsClient
 from fuse.jobs.store import PostgresJobStore
-from fuse.memory.embeddings import FastEmbedder
+from fuse.memory.embeddings import Embedder, FastEmbedder
 from fuse.memory.store import PostgresMemoryStore
 from fuse.reminders.store import PostgresReminderStore
 from fuse.skills.loader import Skill, load_skills
@@ -45,6 +45,7 @@ class Services:
     job_alerts: JobAlertsClient | None
     reminders: PostgresReminderStore
     usage: PostgresUsageStore
+    embedder: Embedder
 
 
 @asynccontextmanager
@@ -101,4 +102,5 @@ async def open_services(settings: Settings) -> AsyncIterator[Services]:
             job_alerts=job_alerts,
             reminders=reminders,
             usage=usage,
+            embedder=embedder,
         )

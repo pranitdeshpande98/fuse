@@ -24,3 +24,6 @@ __pycache__/
 .DS_Store
 # Eval results are personal run history
 evals/results/
+
+# Your job profile is personal; job_profile.example.md is the template
+job_profile.md

@@ -93,6 +93,11 @@ class Settings(BaseSettings):
     # Fuse only uses its API; leave empty to turn the integration off.
     job_alerts_url: str = "http://127.0.0.1:5000"
     job_alerts_poll_minutes: int = 10  # how often to look for new matches to send you
+    # New matches are scored against this file (one line per kind of role you want).
+    job_profile_file: str = "job_profile.md"
+    # Lowest fit listed on Telegram: weak (list everything, best first), possible, strong.
+    # Hidden ones are still counted, on the dashboard and in the email.
+    job_alerts_min_fit: Literal["weak", "possible", "strong"] = "weak"
 
     # Skills (phase 5): one folder per skill, each with a SKILL.md
     skills_dir: str = "skills"

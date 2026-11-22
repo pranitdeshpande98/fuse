@@ -27,6 +27,7 @@ from fuse.channels.core import COMMAND_NAMES, ChatCore, Outgoing
 from fuse.compat import use_selector_event_loop_on_windows
 from fuse.config import Settings, get_settings
 from fuse.google.reader import GoogleApiReader
+from fuse.jobalerts.fit import FitScorer, load_profile
 from fuse.jobalerts.service import MatchWatcher, ScanRunner
 from fuse.jobalerts.tools import make_scan_tool
 from fuse.llm import build_llm, build_structured_llm
@@ -249,8 +250,16 @@ async def setup_proactive(
     scan_runner: ScanRunner | None = app.bot_data.get("scan_runner")
     job_alerts = services.job_alerts if services else None
     if job_alerts is not None:
+        profile = load_profile(settings.job_profile_file)
         watcher = MatchWatcher(
-            job_alerts, cursors, events, notifier, clock, on_sent=add_to_conversation
+            job_alerts,
+            cursors,
+            events,
+            notifier,
+            clock,
+            on_sent=add_to_conversation,
+            scorer=FitScorer(services.embedder, profile) if profile else None,
+            min_fit=settings.job_alerts_min_fit,
         )
         scheduler.add_interval(
             "job_alerts_matches", timedelta(minutes=settings.job_alerts_poll_minutes), watcher.check

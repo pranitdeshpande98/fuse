@@ -17,6 +17,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from fuse.jobalerts.client import JobAlertsClient, JobAlertsDown, JobAlertsError, job_line
+from fuse.jobalerts.fit import LEVELS, FitScorer, Level
 from fuse.proactive.events import Event, EventStore
 from fuse.proactive.notify import Button, Notifier
 from fuse.proactive.schedule import Clock
@@ -41,15 +42,19 @@ def track_buttons(events: list[Event]) -> list[list[Button]]:
     ]
 
 
-def matches_message(events: list[Event], total: int) -> str:
+def matches_message(events: list[Event], total: int, hidden: int = 0) -> str:
     lines = [f"{total} new job match{'es' if total != 1 else ''} from Job Alerts:"]
     for i, event in enumerate(events, 1):
         job = event.payload
-        lines.append(f"{i}. {job_line(job)}")
+        fit = job.get("fit")
+        lines.append(f"{i}. {job_line(job)}" + (f" [{fit['label']}]" if fit else ""))
         if job.get("url"):
             lines.append(f"   {job['url']}")
-    if total > len(events):
-        lines.append(f"(+{total - len(events)} more on the dashboard)")
+    more = total - len(events) - hidden
+    if more > 0:
+        lines.append(f"(+{more} more on the dashboard)")
+    if hidden:
+        lines.append(f"({hidden} weaker fits not shown; they're on the dashboard and in email)")
     lines.append("Track adds one to your applications; Applied also reminds you to follow up.")
     return "\n".join(lines)
 
@@ -63,9 +68,12 @@ class MatchWatcher:
         notifier: Notifier,
         clock: Clock,
         on_sent: Callable[[str], Awaitable[None]] | None = None,
+        scorer: FitScorer | None = None,
+        min_fit: Level = "weak",
     ) -> None:
         self._client, self._cursors, self._events = client, cursors, events
         self._notifier, self._clock, self._on_sent = notifier, clock, on_sent
+        self._scorer, self._min_fit = scorer, min_fit
         self._lock = asyncio.Lock()
 
     async def check(self) -> int:
@@ -91,15 +99,30 @@ class MatchWatcher:
             (j for j in jobs if j.get("first_seen", "") > cursor and j.get("job_key")),
             key=lambda j: j["first_seen"],
         )
+        if self._scorer is not None and fresh:
+            fits = await self._scorer.score([j.get("title", "") for j in fresh])
+            for job, fit in zip(fresh, fits, strict=True):
+                job["fit"] = {
+                    "level": fit.level,
+                    "similarity": fit.similarity,
+                    "role": fit.role,
+                    "label": fit.label(),
+                }
         stored = []
         for job in fresh:
             event = await self._events.add("job", f"job:{job['job_key']}", job)
             if event is not None:
                 stored.append(event)
         if stored:
-            shown = stored[:MAX_IN_MESSAGE]
-            text = matches_message(shown, len(stored))
-            await self._notifier.send(text, track_buttons(shown))
+            # Best fits first. Below the minimum fit: counted, not listed (still emailed).
+            ranked = sorted(
+                stored, key=lambda e: -(e.payload.get("fit") or {}).get("similarity", 0.0)
+            )
+            visible = [e for e in ranked if self._visible(e)]
+            hidden = len(ranked) - len(visible)
+            shown = visible[:MAX_IN_MESSAGE]
+            text = matches_message(shown, len(stored), hidden)
+            await self._notifier.send(text, track_buttons(shown) if shown else None)
             for event in stored:
                 await self._events.decide(event.id, "notified", "new job match", self._clock.now())
             if self._on_sent is not None:
@@ -107,6 +130,10 @@ class MatchWatcher:
         if newest > cursor:
             await self._cursors.set(CURSOR, newest)  # moved only after the message went out
         return len(stored)
+
+    def _visible(self, event: Event) -> bool:
+        fit = event.payload.get("fit")
+        return fit is None or LEVELS.index(fit["level"]) >= LEVELS.index(self._min_fit)
 
 
 class ScanRunner:
