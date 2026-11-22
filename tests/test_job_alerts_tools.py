@@ -1,13 +1,13 @@
 from datetime import UTC, datetime, timedelta
 
 from fuse.jobalerts.client import JobAlertsClient
-from fuse.jobalerts.tools import make_job_alerts_tools
+from fuse.jobalerts.tools import make_job_alerts_tools, make_scan_tool
 from tests.fake_job_alerts import FakeJobAlerts
 
 
-def tools(fake, start_scan=None):
+def tools(fake):
     client = JobAlertsClient("http://127.0.0.1:5000", fake.transport())
-    return {t.name: t for t in make_job_alerts_tools(client, start_scan)}
+    return {t.name: t for t in make_job_alerts_tools(client)}
 
 
 def recent(days_ago: float, key: str, title: str) -> dict:
@@ -49,6 +49,5 @@ async def test_tools_explain_when_job_alerts_is_off():
 
 
 def test_scan_tool_only_where_scans_can_be_started():
-    assert "scan_job_portals" not in tools(FakeJobAlerts())
-    t = tools(FakeJobAlerts(), start_scan=lambda: "Scan started.")
-    assert t["scan_job_portals"].invoke({}) == "Scan started."
+    assert "scan_job_portals" not in tools(FakeJobAlerts())  # not in the worker, for one
+    assert make_scan_tool(lambda: "Scan started.").invoke({}) == "Scan started."

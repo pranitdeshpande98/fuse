@@ -26,6 +26,8 @@ from fuse.channels.core import COMMAND_NAMES, ChatCore, Outgoing
 from fuse.compat import use_selector_event_loop_on_windows
 from fuse.config import Settings, get_settings
 from fuse.google.reader import GoogleApiReader
+from fuse.jobalerts.service import MatchWatcher, ScanRunner
+from fuse.jobalerts.tools import make_scan_tool
 from fuse.llm import build_llm, build_structured_llm
 from fuse.logging_setup import configure_logging
 from fuse.memory.consolidate import ExtractedFacts, consolidate
@@ -205,6 +207,17 @@ async def setup_proactive(
         )
 
     services = app.bot_data.get("services")
+    scan_runner: ScanRunner | None = app.bot_data.get("scan_runner")
+    job_alerts = services.job_alerts if services else None
+    if job_alerts is not None:
+        watcher = MatchWatcher(
+            job_alerts, cursors, events, notifier, clock, on_sent=add_to_conversation
+        )
+        scheduler.add_interval(
+            "job_alerts_matches", timedelta(minutes=settings.job_alerts_poll_minutes), watcher.check
+        )
+        if scan_runner is not None:
+            scan_runner.after = watcher.check  # a scan's new matches arrive right after it
     if services is not None:
         for skill in services.skills:
             if not skill.schedule:
@@ -232,6 +245,9 @@ async def setup_proactive(
             task_max_attempts=settings.task_max_attempts,
             skills=services.skills if services else None,
             jobs=services.jobs if services else None,
+            job_alerts=job_alerts,
+            scan_runner=scan_runner,
+            events=events,
         ),
     )
     if settings.proactive_enabled and app.job_queue is not None:
@@ -245,6 +261,15 @@ def build_application(settings: Settings) -> Application:
 
     async def on_startup(app: Application) -> None:
         services = await resources.enter_async_context(open_services(settings))
+        # Built before the agent, so the agent can get a "scan now" tool. The scan's
+        # report goes to Telegram; its new matches follow (wired in setup_proactive).
+        scan_runner = None
+        extra_tools = [make_task_tools(services.tasks, settings.task_max_attempts)]
+        if services.job_alerts is not None:
+            notifier = TelegramNotifier(app.bot, settings.telegram_allowed_chat_id)
+            scan_runner = ScanRunner(services.job_alerts, notifier)
+            extra_tools.append([make_scan_tool(scan_runner.start)])
+        app.bot_data["scan_runner"] = scan_runner
         pool, memory, google = services.pool, services.memory, services.google
         checkpointer = services.checkpointer
         app.bot_data["runner"] = build_runner(
@@ -254,10 +279,11 @@ def build_application(settings: Settings) -> Application:
             google,
             services.drafts,
             memory,
-            extra_tools=make_task_tools(services.tasks, settings.task_max_attempts),
+            extra_tools=[tool for group in extra_tools for tool in group],
             contacts=services.contacts,
             skills=services.skills,
             jobs=services.jobs,
+            job_alerts=services.job_alerts,
         )
         app.bot_data["tasks"] = services.tasks
         app.bot_data["settings"] = settings

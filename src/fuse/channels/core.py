@@ -13,10 +13,14 @@ from dataclasses import dataclass, field
 from fuse.agent.runner import AgentReply, AgentRunner
 from fuse.approval_ui import after_allowing, approval_buttons, approval_text
 from fuse.contacts import ContactStore, contacts_text
+from fuse.jobalerts.client import JobAlertsClient, JobAlertsError
+from fuse.jobalerts.service import ScanRunner
+from fuse.jobalerts.tools import status_text
 from fuse.jobs.store import JobStore, jobs_text
 from fuse.memory.commands import forget_text, list_memories_text
 from fuse.memory.store import MemoryStore
 from fuse.proactive.alerts import AlertActions
+from fuse.proactive.events import EventStore
 from fuse.proactive.notify import Button, split_message
 from fuse.proactive.store import MuteStore
 from fuse.skills.loader import Skill
@@ -71,11 +75,15 @@ class ChatCore:
         task_max_attempts: int = 3,
         skills: list[Skill] | None = None,
         jobs: JobStore | None = None,
+        job_alerts: JobAlertsClient | None = None,
+        scan_runner: ScanRunner | None = None,
+        events: EventStore | None = None,
     ) -> None:
         self.runner, self.memory, self.tasks = runner, memory, tasks
         self.contacts, self.mutes, self.alert_actions = contacts, mutes, alert_actions
         self.brief, self.task_max_attempts = brief, task_max_attempts
         self.skills, self.jobs = skills or [], jobs
+        self.job_alerts, self.scan_runner, self.events = job_alerts, scan_runner, events
         self.commands: dict[str, Command] = {
             "brief": Command("today's brief, now", self._brief),
             "task": Command("start a background task: /task <goal>", self._task),
@@ -88,6 +96,8 @@ class ChatCore:
             "skills": Command("your skills and when they run", self._skills),
             "skill": Command("run a skill now: /skill <name>", self._skill),
             "jobs": Command("your job applications", self._jobs),
+            "scan": Command("scan your Job Alerts portals now", self._scan),
+            "dashboard": Command("Job Alerts status and failing portals", self._dashboard),
         }
 
     # --- rendering ---------------------------------------------------------------------
@@ -227,6 +237,20 @@ class ChatCore:
             return self._one("The job tracker isn't set up.")
         return self._one(await jobs_text(self.jobs))
 
+    async def _scan(self, thread_id: str, args: str) -> list[Outgoing]:
+        if self.scan_runner is None:
+            return self._one("Job Alerts isn't set up (JOB_ALERTS_URL is empty).")
+        return self._one(self.scan_runner.start())
+
+    async def _dashboard(self, thread_id: str, args: str) -> list[Outgoing]:
+        if self.job_alerts is None:
+            return self._one("Job Alerts isn't set up (JOB_ALERTS_URL is empty).")
+        try:
+            status = await self.job_alerts.status()
+        except JobAlertsError as exc:
+            return self._one(str(exc))
+        return self._one(status_text(status, self.job_alerts.base_url))
+
     async def _unmute(self, thread_id: str, args: str) -> list[Outgoing]:
         if self.mutes is None:
             return self._one("Alerts aren't set up.")
@@ -241,6 +265,8 @@ class ChatCore:
 
 
 COMMAND_NAMES = (
+    "scan",
+    "dashboard",
     "skills",
     "skill",
     "jobs",

@@ -106,3 +106,23 @@ async def test_agent_errors_become_a_friendly_message():
     core, *_ = make_core([])  # the scripted model has nothing to say: it raises
     (out,) = await core.message(THREAD, "hi")
     assert out.text.startswith("Something went wrong")
+
+
+async def test_scan_and_dashboard_commands():
+    from fuse.jobalerts.client import JobAlertsClient
+    from fuse.jobalerts.service import ScanRunner
+    from fuse.proactive.notify import RecordingNotifier
+    from tests.fake_job_alerts import FakeJobAlerts
+
+    core, *_ = make_core([])
+    assert "isn't set up" in (await core.command(THREAD, "scan"))[0].text
+    fake = FakeJobAlerts()
+    core.job_alerts = JobAlertsClient("http://127.0.0.1:5000", fake.transport())
+    core.scan_runner = ScanRunner(core.job_alerts, RecordingNotifier())
+    assert "Scanning" in (await core.command(THREAD, "scan"))[0].text
+    await core.scan_runner.wait()
+    assert fake.scans == 1
+    dashboard = (await core.command(THREAD, "dashboard"))[0].text
+    assert "2 of 3 portals active" in dashboard and "Duke" in dashboard
+    fake.down = True
+    assert "isn't running" in (await core.command(THREAD, "dashboard"))[0].text

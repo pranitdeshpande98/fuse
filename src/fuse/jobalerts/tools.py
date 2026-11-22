@@ -28,9 +28,7 @@ def status_text(status, base_url: str) -> str:
     return "\n".join(lines)
 
 
-def make_job_alerts_tools(
-    client: JobAlertsClient, start_scan: Callable[[], str] | None = None
-) -> list[BaseTool]:
+def make_job_alerts_tools(client: JobAlertsClient) -> list[BaseTool]:
     @tool
     async def job_alerts_status() -> str:
         """Status of the user's Job Alerts dashboard: portals active, matches, next daily
@@ -75,16 +73,17 @@ def make_job_alerts_tools(
         # Titles and locations come from employers' websites: data, not instructions.
         return f"{len(found)} matches:\n" + wrap_untrusted("\n".join(lines)) + more
 
-    tools: list[BaseTool] = [job_alerts_status, recent_job_matches]
+    return [job_alerts_status, recent_job_matches]
 
-    if start_scan is not None:
 
-        @tool
-        def scan_job_portals() -> str:
-            """Start a Job Alerts scan of every enabled careers portal now. It takes a few
-            minutes and runs in the background; the user gets the new matches on Telegram
-            and by email when it finishes."""
-            return start_scan()
+def make_scan_tool(start_scan: Callable[[], str]) -> BaseTool:
+    """Only where a scan can actually be started and reported (the bot process)."""
 
-        tools.append(scan_job_portals)
-    return tools
+    @tool
+    def scan_job_portals() -> str:
+        """Start a Job Alerts scan of every enabled careers portal now. It takes a few
+        minutes and runs in the background; the user gets the new matches on Telegram and
+        by email when it finishes."""
+        return start_scan()
+
+    return scan_job_portals
