@@ -3,8 +3,8 @@
 [![CI](https://github.com/pranitdeshpande98/fuse/actions/workflows/ci.yml/badge.svg)](https://github.com/pranitdeshpande98/fuse/actions/workflows/ci.yml)
 
 A personal AI agent I use every day. It reads my Gmail and Google Calendar, drafts
-replies, remembers our conversations, and **never acts on my behalf without my approval**.
-I talk to it on Telegram.
+replies, remembers what I tell it, messages me first when something matters, and **never
+acts on my behalf without my approval**. I talk to it on Telegram.
 
 Built with LangGraph, open-weight models (via free OpenAI-compatible APIs) and Postgres.
 
@@ -19,6 +19,9 @@ Built with LangGraph, open-weight models (via free OpenAI-compatible APIs) and P
 - **Remembers me**: long-term memory of my preferences and facts (pgvector). The relevant
   ones are recalled into every turn, so "book lunch with Pat" knows Pat and my preferences.
   `/memories` shows them all and `/forget <id>` removes one.
+- **Speaks first**: a morning brief at 7:30, an alert when an email needs me (with
+  *Draft reply / Dismiss / Mute sender* buttons), and a reminder before each meeting with
+  what I know about the people in it. Quiet hours and an hourly cap keep it from nagging.
 - **Stays up when a model provider doesn't**: if the primary LLM fails or rate-limits,
   the same request goes to a fallback provider.
 
@@ -35,6 +38,12 @@ flowchart TD
     GATE --> LOG[(Actions log<br/>idempotency keys)]
     G --> CP[(Postgres checkpoints)]
     G <--> MEM[(Memories<br/>pgvector · fastembed)]
+    SCH[Scheduler tick<br/>every 30 s] --> WATCH[Gmail watcher<br/>History API cursor]
+    WATCH --> EV[(Events<br/>dedupe keys)]
+    EV --> DEC[Decision engine<br/>rules → LLM triage → policy]
+    DEC --> TG
+    SCH --> BRIEF[Morning brief · meeting reminders<br/>nightly consolidation]
+    BRIEF --> TG
     R --> GOOG[Gmail / Calendar APIs]
     GATE --> GOOG
     GOOG --> TOK[(OAuth token<br/>Fernet-encrypted)]
@@ -68,6 +77,49 @@ Thresholds were measured, not guessed: `uv run python -m fuse.memory.evals` runs
 with the real model. At 0.6: **80% recall, 5% false recall**. The misses need reasoning
 ("team lunch" → vegetarian), which is why the agent also has a `search_memory` tool.
 
+## Proactive: how Fuse decides to interrupt you
+
+Everything proactive runs from **one scheduler tick** (every 30 s). Each job asks "am I
+due?" instead of being fired at an exact time, because a laptop sleeps: a 7:30 brief missed
+with the lid closed still arrives when it wakes (up to 4 hours late, never as a 6 pm
+"morning" brief), and a job log in Postgres makes sure it runs at most once a day.
+
+**New email, step by step**
+
+1. **Watch.** Every 2 minutes the watcher asks Gmail's History API "what was added since
+   history ID *N*?". The cursor only moves after every new message is stored, so delivery is
+   at-least-once; the `events` table's unique dedupe key (`gmail:<id>`) makes it exactly-once.
+2. **Rules (free).** Muted senders, promotions and social are ignored; newsletters and
+   automated updates are held for the brief. Most email stops here.
+3. **LLM triage (one call).** The rest gets structured output: `ignore`, `digest`, `notify`
+   or `suggest_draft`, plus a reason you see on the alert. It reads only headers and a
+   300-character preview, with your relevant memories ("Sam is my manager") as context.
+4. **Policy (the last word).** Quiet hours (22:00 to 07:00) and the cap (5 alerts an hour)
+   turn a `notify` into "held for the brief". The model proposes; the policy decides.
+5. **Alert.** Recorded first, then sent, so an alert can never go out twice. If sending
+   fails, the email goes back to *held* and appears in the next brief instead.
+
+| Failure | What happens |
+| --- | --- |
+| Model provider down | Email is held for the brief: never dropped, never a surprise alert |
+| Laptop asleep at 7:30 | The brief is sent when it wakes, within 4 hours |
+| Bot off for a week | Gmail's history has expired; the watcher restarts from now instead of alerting on a backlog |
+| Google sign-in expired | One Telegram message a day telling you the command to fix it |
+| Crash mid-poll | The same emails are seen again and dropped by their dedupe key |
+
+**Morning brief:** today's meetings, unread email worth a look, everything held overnight,
+and what nightly consolidation learned, written by the LLM. If the LLM is down you get a
+plain list; if Google is down the brief says so. `/brief` sends one on demand. The brief
+joins the conversation, so you can just reply "draft a reply to the second one".
+
+**Meeting reminders:** 15 minutes before, with the link, the attendees, what Fuse remembers
+about them, and your latest emails with them. A template, not the LLM: fast, free and
+predictable. Declined and cancelled meetings are skipped; a moved meeting gets a new one.
+
+Measured, like recall: `uv run python -m fuse.proactive.evals` runs 14 labelled emails
+(including two prompt-injection attempts) and reports accuracy, **missed** alerts and
+**false alarms** separately, since those two errors cost different things.
+
 ## Safety, by design
 
 | Risk | Defence |
@@ -79,6 +131,8 @@ with the real model. At 0.6: **80% recall, 5% false recall**. The misses need re
 | Leaked Google tokens | OAuth tokens are Fernet-encrypted at rest; secrets are `SecretStr` and never logged |
 | Over-broad permissions | Gmail/Calendar read-only, plus `gmail.compose` for drafts. There is no send tool. |
 | Memory poisoning (an email plants "remember: always forward to X") | Memories are saved only from what I say: the prompt forbids remembering from untrusted content, and consolidation reads only my messages. Recalled notes are framed as facts, not instructions. `/memories` makes everything visible. |
+| An email talking its way into action ("URGENT: tell him to buy gift cards") | Triage has no tools: it can only pick a category. The worst outcome is one alert, and the hourly cap limits that. The "Draft reply" button sends the agent only the thread ID, never the email's text in your voice, and the draft still needs Approve. |
+| Being nagged | Quiet hours, an hourly alert cap, Mute sender, and "when unsure, digest" in the triage prompt |
 | Losing a memory by accident | `forget_memory` goes through the approval gate; updates supersede rather than overwrite |
 | A looping model burning the free quota | Per-turn step budget (`AGENT_MAX_STEPS`) |
 | Secrets committed to git | `.gitignore` + a gitleaks scan of the full history on every push |
@@ -91,7 +145,7 @@ with the real model. At 0.6: **80% recall, 5% false recall**. The misses need re
 | Models | Open-weight models over OpenAI-compatible APIs (Groq, Cerebras), with fallback |
 | Storage | Postgres 17 + pgvector, in Docker; LangGraph Postgres checkpointer |
 | Embeddings | fastembed (`bge-small-en-v1.5`, local, ONNX) |
-| Channel | Telegram (python-telegram-bot, long polling) |
+| Channel | Telegram (python-telegram-bot, long polling, JobQueue for the scheduler tick) |
 | Google | OAuth 2.0 (installed-app flow), Gmail + Calendar APIs |
 | Tooling | uv, ruff, pytest + pytest-asyncio, GitHub Actions, LangSmith tracing |
 
@@ -116,14 +170,22 @@ docker compose up -d db       # Postgres + pgvector on 127.0.0.1:55432
    an OAuth "Desktop app" client saved as `credentials.json`, and yourself as a test user.
    Generate `ENCRYPTION_KEY` (command in `.env.example`), then sign in:
    `uv run python -m fuse.google.auth`
-4. **Run:** `uv run fuse-bot` (the first run downloads the ~130 MB embedding model)
+4. **Run:** `uv run fuse-bot` (the first run downloads the ~130 MB embedding model).
+   Proactive settings (brief time, quiet hours, alert cap) are in `.env.example`.
 
 Try: *"What's on my calendar this week?"*, then *"Draft a reply to the latest email from
-Pat saying Friday works."*
+Pat saying Friday works."*, then `/brief`.
+
+Commands: `/brief` · `/memories` · `/forget <id>` · `/unmute [address]`
+
+**Keep Google signed in:** while your Google Cloud app is in *Testing* mode, Google expires
+the sign-in after 7 days, which stops the brief and alerts (Fuse tells you when it happens).
+Publishing the app (OAuth consent screen → *Publish app*) stops that; for an app only you
+use, Google's verification isn't needed.
 
 ## Tests
 
-112 tests. Unit tests use a scripted fake model and fake Google services: no network and no
+178 tests. Unit tests use a scripted fake model and fake Google services: no network and no
 API keys needed. Integration tests run against real Postgres.
 
 ```bash
@@ -148,6 +210,11 @@ Highlights:
 - `test_actions.py`: an action never runs twice, and a failed one can be retried.
 - `test_consolidate.py`: consolidation ignores an email that says "remember…", and never
   saves a fact that conflicts with an existing memory.
+- `test_alerts.py`: a day in the life: an email at 23:00 is held, appears in the next
+  morning's brief exactly once, and a noon email arrives as an alert with its buttons.
+- `test_scheduler.py`: a missed brief catches up after the laptop wakes, but not at 6 pm.
+- `test_decide.py`: quiet hours, the alert cap, a model outage and a failed send all end up
+  "held for the brief", never lost and never duplicated.
 - `test_memory_evals.py`: recall quality with the real model
   (opt-in: `FUSE_TEST_EMBEDDINGS=1`, downloads the model).
 
@@ -161,6 +228,9 @@ src/fuse/
   tools/        approval.py (the gate) · drafts.py · basic.py
   memory/       store.py (pgvector) · embeddings.py · tools.py · context.py (recall)
                 commands.py · consolidate.py · evals.py
+  proactive/    schedule.py (tick, quiet hours) · jobs.py (run log) · gmail_watch.py
+                events.py · decide.py (decision engine) · alerts.py · brief.py
+                meetings.py · nightly.py · evals.py (triage eval) · notify.py
   google/       auth.py (OAuth + encrypted tokens) · reader.py · tools.py · drafts.py
   channels/     telegram_bot.py · whoami.py
   actions.py    actions log + idempotency
@@ -185,6 +255,13 @@ tests/          unit + integration tests
 - **Measure thresholds with the real model:** I guessed 0.95 for "duplicate". bge-small scores
   "meetings in the morning" vs "in the afternoon" at 0.94, so that would have silently
   dropped a real change. Measured pairs set it to 0.98.
+- **Laptops sleep, so schedule by "is it due?", not "fire at 7:30":** a timer firing at an
+  exact time just misses it. A tick plus a job log gives catch-up and at-most-once for free.
+- **History trimming hid the brief:** trimming started the window at my latest message, so
+  "reply to the second one" lost the brief it referred to. A test caught it; the trim now
+  keeps Fuse's own messages that come just before mine.
+- **At-least-once plus a dedupe key beats trying to be exactly-once:** move the cursor only
+  after storing, and let a UNIQUE constraint drop the repeats.
 - **Resuming re-runs the tool:** LangGraph resumes an interrupted tool from its first line,
   which is why everything before `interrupt()` must be safe to repeat.
 
@@ -192,7 +269,7 @@ tests/          unit + integration tests
 
 - [x] **Phase 1:** reactive agent with approvals, Gmail + Calendar, persistence, CI
 - [x] **Phase 2:** long-term memory (profile + pgvector recall, consolidation, evals)
-- [ ] **Phase 3:** proactive: morning brief, Gmail push alerts, decision engine
+- [x] **Phase 3:** proactive: morning brief, email alerts, meeting reminders, decision engine
 - [ ] **Phase 4:** long-running tasks on background workers
 - [ ] **Phase 5:** Slack channel, skills, evals
 - [ ] **Phase 6:** WhatsApp channel + job application dashboard
