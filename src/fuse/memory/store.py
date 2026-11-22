@@ -19,7 +19,9 @@ from fuse.memory.embeddings import EMBEDDING_DIM, Embedder, cosine_similarity
 MemoryKind = Literal["profile", "fact"]
 
 # Saving something almost identical to an existing memory returns the existing one instead.
-DUPLICATE_SIMILARITY = 0.95
+# Kept high on purpose: with bge-small, "meetings in the afternoon" vs "...in the morning"
+# already scores ~0.94, and those are different (contradicting) facts, not duplicates.
+DUPLICATE_SIMILARITY = 0.98
 
 SCHEMA = [
     "CREATE EXTENSION IF NOT EXISTS vector",

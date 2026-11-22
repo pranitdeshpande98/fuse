@@ -29,6 +29,9 @@ from fuse.google.reader import GoogleApiReader, GoogleReader
 from fuse.google.tools import make_google_tools
 from fuse.llm import build_llm
 from fuse.logging_setup import configure_logging
+from fuse.memory.embeddings import FastEmbedder
+from fuse.memory.store import MemoryStore, PostgresMemoryStore
+from fuse.memory.tools import make_memory_tools
 from fuse.tools.basic import make_basic_tools
 from fuse.tools.drafts import DraftSink, LocalDraftSink, make_draft_tools
 from fuse.tracing import enable_tracing
@@ -49,11 +52,13 @@ def build_runner(
     actions: ActionStore,
     google: GoogleReader | None = None,
     drafts: DraftSink | None = None,
+    memory: MemoryStore | None = None,
 ) -> AgentRunner:
     tools = [
         *make_basic_tools(settings.user_timezone),
         *(make_google_tools(google) if google else []),
         *make_draft_tools(actions, drafts or LocalDraftSink()),
+        *(make_memory_tools(memory, actions) if memory else []),
     ]
     model = build_llm(settings, tools)
     graph = build_graph(model, tools, checkpointer)
@@ -153,7 +158,15 @@ def build_application(settings: Settings) -> Application:
         else:
             log.warning("ENCRYPTION_KEY not set: Gmail and Calendar tools are disabled")
 
-        app.bot_data["runner"] = build_runner(settings, checkpointer, actions, google, drafts)
+        log.info("Loading the embedding model (the first run downloads ~130 MB)")
+        embedder = FastEmbedder(settings.embedding_model, settings.fastembed_cache_dir)
+        await embedder.embed(["warm up"])  # load it now, not during your first message
+        memory = PostgresMemoryStore(pool, embedder)
+        await memory.ensure_schema()
+
+        app.bot_data["runner"] = build_runner(
+            settings, checkpointer, actions, google, drafts, memory
+        )
         app.bot_data["settings"] = settings
         log.info("Agent ready; conversations are stored in Postgres")
 
