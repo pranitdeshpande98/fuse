@@ -123,7 +123,7 @@ Pat saying Friday works."*
 
 ## Tests
 
-110 tests. Unit tests use a scripted fake model and fake Google services: no network and no
+112 tests. Unit tests use a scripted fake model and fake Google services: no network and no
 API keys needed. Integration tests run against real Postgres.
 
 ```bash
