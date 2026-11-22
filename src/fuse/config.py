@@ -3,7 +3,7 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import BaseModel, SecretStr
+from pydantic import BaseModel, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -57,6 +57,24 @@ class Settings(BaseSettings):
     # Memory (phase 2): a local embedding model, downloaded once into fastembed_cache_dir.
     embedding_model: str = "BAAI/bge-small-en-v1.5"
     fastembed_cache_dir: str = ".cache/fastembed"
+
+    # Proactive (phase 3): Fuse messages you first. Times are HH:MM in user_timezone.
+    proactive_enabled: bool = True
+    brief_time: str = "07:30"
+    quiet_hours_start: str = "22:00"  # no alerts from here...
+    quiet_hours_end: str = "07:00"  # ...until here; they wait for the morning brief
+    gmail_poll_seconds: int = 120
+    max_alerts_per_hour: int = 5
+    meeting_reminder_minutes: int = 15
+    consolidation_time: str = "03:00"  # nightly memory consolidation
+
+    @field_validator("brief_time", "quiet_hours_start", "quiet_hours_end", "consolidation_time")
+    @classmethod
+    def _check_hhmm(cls, value: str) -> str:
+        from fuse.proactive.schedule import parse_hhmm
+
+        parse_hhmm(value)  # raises a clear error for anything that isn't HH:MM
+        return value
 
     # Tracing (step 11): send a record of every agent run to LangSmith for debugging.
     langsmith_tracing: bool = False

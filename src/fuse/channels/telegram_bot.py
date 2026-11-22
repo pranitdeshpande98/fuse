@@ -34,11 +34,15 @@ from fuse.memory.commands import forget_text, list_memories_text
 from fuse.memory.embeddings import FastEmbedder
 from fuse.memory.store import MemoryStore, PostgresMemoryStore
 from fuse.memory.tools import make_memory_tools
+from fuse.proactive.jobs import PostgresJobLog
+from fuse.proactive.schedule import Scheduler, SystemClock
 from fuse.tools.basic import make_basic_tools
 from fuse.tools.drafts import DraftSink, LocalDraftSink, make_draft_tools
 from fuse.tracing import enable_tracing
 
 log = logging.getLogger("fuse.telegram")
+
+TICK_SECONDS = 30  # how often the scheduler checks for due proactive jobs
 
 TELEGRAM_LIMIT = 4000  # Telegram's hard cap is 4096 characters per message
 
@@ -140,6 +144,12 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await send_reply(update, reply)
 
 
+async def on_tick(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Runs every TICK_SECONDS: lets the scheduler start whatever proactive job is due."""
+    scheduler: Scheduler = context.application.bot_data["scheduler"]
+    await scheduler.tick()
+
+
 async def on_memories(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/memories: show everything Fuse remembers about you."""
     memory: MemoryStore = context.application.bot_data["memory"]
@@ -187,6 +197,14 @@ def build_application(settings: Settings) -> Application:
         )
         app.bot_data["settings"] = settings
         app.bot_data["memory"] = memory
+
+        job_log = PostgresJobLog(pool)
+        await job_log.ensure_schema()
+        scheduler = Scheduler(SystemClock(settings.user_timezone), job_log)
+        app.bot_data["scheduler"] = scheduler
+        if settings.proactive_enabled and app.job_queue is not None:
+            app.job_queue.run_repeating(on_tick, interval=TICK_SECONDS, first=15, name="tick")
+            log.info("Proactive jobs on (timezone %s)", settings.user_timezone)
         log.info("Agent ready; conversations are stored in Postgres")
 
     async def on_shutdown(app: Application) -> None:

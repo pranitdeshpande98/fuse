@@ -17,7 +17,8 @@ dependencies = [
     "langgraph-checkpoint-postgres>=3,<4",
     "psycopg[binary,pool]>=3.3.9",
     "pydantic-settings>=2.16.3",
-    "python-telegram-bot>=22,<23",
+    "python-telegram-bot[job-queue]>=22,<23",
+    "tzdata>=2026.6 ; sys_platform == 'win32'",
 ]
 [project.scripts]
 fuse-bot = "fuse.channels.telegram_bot:main"

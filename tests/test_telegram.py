@@ -26,3 +26,9 @@ def test_handlers_are_registered():
     commands = {c for h in handlers if isinstance(h, CommandHandler) for c in h.commands}
     assert commands == {"memories", "forget"}
     assert all("42" in repr(h.filters) for h in handlers if isinstance(h, CommandHandler))
+
+
+def test_job_queue_is_available():
+    """The job-queue extra must be installed, or proactive jobs would silently never run."""
+    settings = Settings(_env_file=None, telegram_bot_token="123:fake", telegram_allowed_chat_id=42)
+    assert build_application(settings).job_queue is not None
