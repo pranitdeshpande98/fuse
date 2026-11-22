@@ -11,6 +11,7 @@ from telegram.ext import (
     Application,
     ApplicationBuilder,
     CallbackQueryHandler,
+    CommandHandler,
     ContextTypes,
     MessageHandler,
     filters,
@@ -29,6 +30,7 @@ from fuse.google.reader import GoogleApiReader, GoogleReader
 from fuse.google.tools import make_google_tools
 from fuse.llm import build_llm
 from fuse.logging_setup import configure_logging
+from fuse.memory.commands import forget_text, list_memories_text
 from fuse.memory.embeddings import FastEmbedder
 from fuse.memory.store import MemoryStore, PostgresMemoryStore
 from fuse.memory.tools import make_memory_tools
@@ -138,6 +140,20 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await send_reply(update, reply)
 
 
+async def on_memories(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/memories: show everything Fuse remembers about you."""
+    memory: MemoryStore = context.application.bot_data["memory"]
+    text = await list_memories_text(memory)
+    await update.effective_chat.send_message(text[:TELEGRAM_LIMIT])  # type: ignore[union-attr]
+
+
+async def on_forget(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/forget <id>: delete one memory."""
+    memory: MemoryStore = context.application.bot_data["memory"]
+    text = await forget_text(memory, " ".join(context.args or []))
+    await update.effective_chat.send_message(text)  # type: ignore[union-attr]
+
+
 def build_application(settings: Settings) -> Application:
     # Opened when the bot starts and closed when it stops: the database pool lives this long.
     resources = AsyncExitStack()
@@ -170,6 +186,7 @@ def build_application(settings: Settings) -> Application:
             settings, checkpointer, actions, google, drafts, memory
         )
         app.bot_data["settings"] = settings
+        app.bot_data["memory"] = memory
         log.info("Agent ready; conversations are stored in Postgres")
 
     async def on_shutdown(app: Application) -> None:
@@ -184,6 +201,8 @@ def build_application(settings: Settings) -> Application:
     )
     only_me = filters.Chat(chat_id=settings.telegram_allowed_chat_id)
     app.add_handler(MessageHandler(only_me & filters.TEXT & ~filters.COMMAND, on_message))
+    app.add_handler(CommandHandler("memories", on_memories, filters=only_me))
+    app.add_handler(CommandHandler("forget", on_forget, filters=only_me))
     app.add_handler(CallbackQueryHandler(on_button, pattern=r"^(approve|reject):"))
     return app
 
