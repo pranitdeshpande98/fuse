@@ -51,6 +51,10 @@ class Settings(BaseSettings):
     # Encrypts stored Google tokens. Generate once (see .env.example) and never change it.
     encryption_key: SecretStr = SecretStr("")
 
+    # Memory (phase 2): a local embedding model, downloaded once into fastembed_cache_dir.
+    embedding_model: str = "BAAI/bge-small-en-v1.5"
+    fastembed_cache_dir: str = ".cache/fastembed"
+
     # Tracing (step 11): send a record of every agent run to LangSmith for debugging.
     langsmith_tracing: bool = False
     langsmith_api_key: SecretStr = SecretStr("")

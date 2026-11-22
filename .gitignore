@@ -7,6 +7,9 @@
 credentials*.json
 token*.json
 
+# Local caches (e.g. the embedding model)
+.cache/
+
 # Python
 __pycache__/
 *.py[cod]
