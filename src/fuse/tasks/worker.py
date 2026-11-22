@@ -323,6 +323,9 @@ def main() -> None:
         asyncio.run(_main())
     except KeyboardInterrupt:
         log.info("worker stopped")
+    except Exception:
+        log.exception("the worker stopped because of an error")  # into logs\worker.log too
+        raise
 
 
 if __name__ == "__main__":

@@ -379,7 +379,11 @@ def main() -> None:
             "Set TELEGRAM_ALLOWED_CHAT_ID in .env (run: uv run python -m fuse.channels.whoami)"
         )
     log.info("Fuse bot starting; only chat %s is allowed", settings.telegram_allowed_chat_id)
-    build_application(settings).run_polling()
+    try:
+        build_application(settings).run_polling()
+    except Exception:
+        log.exception("the bot stopped because of an error")  # into logs\bot.log as well
+        raise
 
 
 if __name__ == "__main__":

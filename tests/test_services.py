@@ -52,3 +52,32 @@ async def test_open_services_builds_everything_the_bot_and_worker_use(monkeypatc
             job_alerts=services.job_alerts,
             reminders=services.reminders,
         )
+
+
+@pytest.mark.skipif(not DB_URL, reason="TEST_DATABASE_URL not set")
+async def test_bot_and_worker_starting_together_on_fresh_tables(monkeypatch, tmp_path):
+    """The bot and the worker set up the same new tables at the same moment. Without the
+    schema lock, one of them crashed with a duplicate-key error on Postgres's catalog."""
+    import asyncio
+
+    import fuse.services as services_module
+    from fuse.db import open_pool
+    from fuse.memory.embeddings import HashingEmbedder
+
+    class QuickEmbedder(HashingEmbedder):
+        def __init__(self, *args, **kwargs):
+            super().__init__()
+
+    monkeypatch.setattr(services_module, "FastEmbedder", QuickEmbedder)
+    async with open_pool(DB_URL) as pool, pool.connection() as conn:
+        for table in ("job_applications", "reminders", "llm_usage", "contacts"):
+            await conn.execute(f"DROP TABLE IF EXISTS {table} CASCADE")
+
+    settings = Settings(_env_file=None, database_url=DB_URL, skills_dir=str(tmp_path))
+
+    async def start_one():
+        async with services_module.open_services(settings) as services:
+            return services.jobs is not None
+
+    for _ in range(3):  # a few rounds, to give a race every chance to show up
+        assert await asyncio.gather(start_one(), start_one(), start_one()) == [True] * 3
