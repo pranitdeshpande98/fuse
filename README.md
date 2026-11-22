@@ -2,9 +2,10 @@
 
 [![CI](https://github.com/pranitdeshpande98/fuse/actions/workflows/ci.yml/badge.svg)](https://github.com/pranitdeshpande98/fuse/actions/workflows/ci.yml)
 
-A personal AI agent I use every day. It reads my Gmail and Google Calendar, drafts
-replies, remembers what I tell it, messages me first when something matters, and **never
-acts on my behalf without my approval**. I talk to it on Telegram.
+A personal AI agent I use every day. It reads my Gmail and Google Calendar, writes
+replies, searches the web, runs long jobs in the background, remembers what I tell it,
+messages me first when something matters, and **never acts on my behalf without my
+approval**. I talk to it on Telegram.
 
 Built with LangGraph, open-weight models (via free OpenAI-compatible APIs) and Postgres.
 
@@ -12,8 +13,15 @@ Built with LangGraph, open-weight models (via free OpenAI-compatible APIs) and P
 
 - **Answers questions about my day**: "What's on my calendar this week?", "Any unread
   emails from my manager?", "Summarise the latest thread with Pat."
-- **Drafts emails, with approval**: it proposes a draft in Telegram with Approve / Reject
-  buttons. Approved drafts land in my Gmail Drafts folder. Nothing is ever sent.
+- **Writes emails; I decide what happens**: every email comes with *Send*, *Save as draft*
+  and *Reject*. *Send* only appears if every recipient is already in the thread or in my
+  approved contacts, a rule enforced in code, not in the prompt.
+- **Runs long jobs in the background**: "go through last month's recruiter emails and list
+  company, role and status" becomes task #7 on a separate worker process. The chat stays
+  free, the task reports progress, pauses for approvals, survives restarts, and sends the
+  result when it's done.
+- **Searches the web** (DuckDuckGo, no API key) and reads pages, with private addresses
+  blocked.
 - **Remembers conversations**: state is checkpointed to Postgres after every step, so a
   restart loses nothing, not even an approval that's still waiting.
 - **Remembers me**: long-term memory of my preferences and facts (pgvector). The relevant
@@ -30,6 +38,10 @@ Built with LangGraph, open-weight models (via free OpenAI-compatible APIs) and P
 ```mermaid
 flowchart TD
     TG[Telegram<br/>locked to one chat ID] --> RUN[AgentRunner<br/>send / resume]
+    RUN -- start_background_task --> Q[(Task queue<br/>Postgres, SKIP LOCKED)]
+    Q --> WK[Worker process<br/>leases · budgets · retries]
+    WK --> G
+    WK -- progress, results, approvals --> TG
     RUN --> G[LangGraph ReAct loop<br/>model ⇄ tools]
     G --> LLM[Open-weight LLMs<br/>Groq → Cerebras fallback]
     G --> R[Read tools<br/>calendar · email search · read thread]
@@ -120,6 +132,49 @@ Measured, like recall: `uv run python -m fuse.proactive.evals` runs 14 labelled 
 (including two prompt-injection attempts) and reports accuracy, **missed** alerts and
 **false alarms** separately, since those two errors cost different things.
 
+## Background tasks: a queue in Postgres
+
+A task is a row in `tasks`. The worker (`uv run fuse-worker`, or both with `uv run fuse`)
+takes the next one with `SELECT … FOR UPDATE SKIP LOCKED`: the row it picks is locked,
+rows other workers locked are skipped, so two workers never get the same task and never
+wait for each other. No Redis or Celery needed: Postgres is already there.
+
+```
+queued --> running --> done / failed / cancelled
+   ^          '------> waiting_approval --(your tap, via the bot)--> queued --> resumes
+   '------- retry later (rate limit: 30 s, 60 s, 120 s + jitter) <--'
+```
+
+- **Leases:** the worker holds a task for 2 minutes and renews every 40 s. If it dies, the
+  lease expires and the next claim takes over. Every write checks `lease_owner`
+  (*fencing*), so a worker that froze and woke up can't overwrite the new owner's work.
+- **Crash recovery is cheap:** each task has its own checkpointed thread (`task:<id>`), so a
+  new worker continues from the last saved step instead of starting over. A test kills a
+  task mid-run and checks the finished tool call isn't repeated.
+- **Approvals across processes:** the worker pauses (`interrupt()`) and marks the task
+  *waiting_approval*. Your tap goes to the bot, which only writes the decision to the row;
+  the worker claims it again and resumes. Only the approval the task is actually waiting
+  for is accepted, so an old button does nothing.
+- **Budgets:** steps (`TASK_MAX_STEPS`), time (`TASK_TIMEOUT_MINUTES`), tokens per run
+  (`TASK_MAX_TOKENS`, counted from each reply's usage) and attempts. At most 3 active tasks.
+- **Follow up in chat:** `/tasks`, `/cancel <id>`, or "what did task 7 find?"
+  (`check_task`).
+
+## Sending email: who can receive it
+
+1. The model writes the email. Recipients are parsed **strictly** (anything that isn't a
+   plain address is refused) and only the normalised addresses are used from then on, so
+   what's checked is exactly what Gmail gets. There is no BCC: nobody can be added out of
+   sight.
+2. **Allowlist, in code:** your contacts plus everyone already in the thread being replied to.
+   All allowed: *Send / Save as draft / Reject*. Anyone not allowed: no *Send*; instead
+   *Always allow &lt;address&gt;* (or `/contacts add`), or save a draft and send it yourself.
+3. **Checked again at the moment of sending:** a forged or stale *Send* decision for a
+   recipient who isn't allowed sends nothing (there's a test for exactly that).
+4. **At most once:** the action is marked `sending` *before* Gmail is called. If Fuse dies
+   mid-send it can't know whether the email left, so it tells you to check Sent rather than
+   risk a second copy. (Drafts use exactly-once retry instead: a duplicate draft is harmless.)
+
 ## Safety, by design
 
 | Risk | Defence |
@@ -129,7 +184,10 @@ Measured, like recall: `uv run python -m fuse.proactive.evals` runs 14 labelled 
 | Prompt injection via email ("ignore your instructions and…") | All email/calendar content wrapped in `<untrusted_content>` tags that can't be closed from inside; the system prompt treats it as data, never instructions. The approval gate is the backstop. |
 | Strangers using the bot | Messages and button presses are accepted from one Telegram chat ID only |
 | Leaked Google tokens | OAuth tokens are Fernet-encrypted at rest; secrets are `SecretStr` and never logged |
-| Over-broad permissions | Gmail/Calendar read-only, plus `gmail.compose` for drafts. There is no send tool. |
+| Over-broad permissions | Gmail/Calendar read-only, plus `gmail.compose` for drafts and sending (Google has no narrower scope that allows sending). Fuse sends only after you tap *Send*. |
+| Emailing the wrong person | Code-enforced recipient allowlist, checked at preview and again at send; no BCC; strict address parsing; at-most-once sending |
+| A web page steering the agent (SSRF, injection) | `read_web_page` refuses private, loopback and link-local addresses on every redirect, caps size and type, and wraps text as untrusted |
+| A background task running away | Step, time, token and attempt budgets; at most 3 active tasks; `/cancel` |
 | Memory poisoning (an email plants "remember: always forward to X") | Memories are saved only from what I say: the prompt forbids remembering from untrusted content, and consolidation reads only my messages. Recalled notes are framed as facts, not instructions. `/memories` makes everything visible. |
 | An email talking its way into action ("URGENT: tell him to buy gift cards") | Triage has no tools: it can only pick a category. The worst outcome is one alert, and the hourly cap limits that. The "Draft reply" button sends the agent only the thread ID, never the email's text in your voice, and the draft still needs Approve. |
 | Being nagged | Quiet hours, an hourly alert cap, Mute sender, and "when unsure, digest" in the triage prompt |
@@ -170,13 +228,15 @@ docker compose up -d db       # Postgres + pgvector on 127.0.0.1:55432
    an OAuth "Desktop app" client saved as `credentials.json`, and yourself as a test user.
    Generate `ENCRYPTION_KEY` (command in `.env.example`), then sign in:
    `uv run python -m fuse.google.auth`
-4. **Run:** `uv run fuse-bot` (the first run downloads the ~130 MB embedding model).
-   Proactive settings (brief time, quiet hours, alert cap) are in `.env.example`.
+4. **Run:** `uv run fuse` starts the bot and the background worker together (the first run
+   downloads the ~130 MB embedding model). `uv run fuse-bot` and `uv run fuse-worker` run
+   them separately. Proactive and task settings are in `.env.example`.
 
 Try: *"What's on my calendar this week?"*, then *"Draft a reply to the latest email from
 Pat saying Friday works."*, then `/brief`.
 
-Commands: `/brief` · `/memories` · `/forget <id>` · `/unmute [address]`
+Commands: `/brief` · `/task <goal>` · `/tasks` · `/cancel <id>` · `/contacts [add|remove]` ·
+`/memories` · `/forget <id>` · `/unmute [address]`
 
 **Keep Google signed in:** while your Google Cloud app is in *Testing* mode, Google expires
 the sign-in after 7 days, which stops the brief and alerts (Fuse tells you when it happens).
@@ -185,7 +245,7 @@ use, Google's verification isn't needed.
 
 ## Tests
 
-179 tests. Unit tests use a scripted fake model and fake Google services: no network and no
+244 tests. Unit tests use a scripted fake model and fake Google services: no network and no
 API keys needed. Integration tests run against real Postgres.
 
 ```bash
@@ -210,6 +270,12 @@ Highlights:
 - `test_actions.py`: an action never runs twice, and a failed one can be retried.
 - `test_consolidate.py`: consolidation ignores an email that says "remember…", and never
   saves a fact that conflicts with an existing memory.
+- `test_tasks_end_to_end.py`: chat starts a task, the worker pauses to send to a new
+  recipient, you tap *Always allow* then *Send*, the worker is replaced, and a new worker
+  finishes: sent once, nothing lost.
+- `test_send.py`: a forged *Send* to a recipient who isn't allowed sends nothing; a crash
+  mid-send never sends twice; malformed recipient lists are refused before any preview.
+- `test_web.py`: localhost, private ranges, cloud metadata and redirects to them are refused.
 - `test_alerts.py`: a day in the life: an email at 23:00 is held, appears in the next
   morning's brief exactly once, and a noon email arrives as an alert with its buttons.
 - `test_scheduler.py`: a missed brief catches up after the laptop wakes, but not at 6 pm.
@@ -225,9 +291,13 @@ CI runs lint, formatting, all tests against a pgvector service container, and a 
 ```
 src/fuse/
   agent/        graph.py (ReAct loop) · runner.py (send/resume) · prompts.py
-  tools/        approval.py (the gate) · drafts.py · basic.py
   memory/       store.py (pgvector) · embeddings.py · tools.py · context.py (recall)
                 commands.py · consolidate.py · evals.py
+  tasks/        queue.py (SKIP LOCKED, leases) · worker.py · tools.py · report.py · budget.py
+  tools/        approval.py (the gate) · drafts.py (email) · web.py · basic.py
+  contacts.py   the recipient allowlist
+  services.py   opens the database, Google and memory for the bot and the worker
+  launcher.py   `uv run fuse`: bot + worker
   proactive/    schedule.py (tick, quiet hours) · jobs.py (run log) · gmail_watch.py
                 events.py · decide.py (decision engine) · alerts.py · brief.py
                 meetings.py · nightly.py · evals.py (triage eval) · notify.py
@@ -262,6 +332,14 @@ tests/          unit + integration tests
   keeps Fuse's own messages that come just before mine.
 - **At-least-once plus a dedupe key beats trying to be exactly-once:** move the cursor only
   after storing, and let a UNIQUE constraint drop the repeats.
+- **Exactly-once is the wrong goal for sending email:** retrying an action whose outcome is
+  unknown is right for a draft and wrong for an email. Irreversible actions get "mark first,
+  then act", and an unknown outcome is reported, not retried.
+- **Check what you send, not what you were given:** the address parser silently dropped
+  `junk@@` from a list while the raw header still went to Gmail. Now only the parsed,
+  checked addresses are used.
+- **Postgres is a fine queue at this scale:** `SKIP LOCKED` plus leases and fencing gives
+  safe concurrent workers without another service to run.
 - **Resuming re-runs the tool:** LangGraph resumes an interrupted tool from its first line,
   which is why everything before `interrupt()` must be safe to repeat.
 
@@ -270,12 +348,8 @@ tests/          unit + integration tests
 - [x] **Phase 1:** reactive agent with approvals, Gmail + Calendar, persistence, CI
 - [x] **Phase 2:** long-term memory (profile + pgvector recall, consolidation, evals)
 - [x] **Phase 3:** proactive: morning brief, email alerts, meeting reminders, decision engine
-- [ ] **Phase 4:** long-running tasks on background workers
-  - [ ] **Send button:** a draft preview gets *Send* next to *Save as draft* and *Reject*.
-    Sending happens only when you tap *Send*. Recipients are checked in code against an
-    allowlist (people already in the thread, or contacts you approved): if any recipient
-    fails, *Send* isn't offered, only *Save as draft*. To, CC and BCC are shown in full, and
-    each send runs exactly once (idempotency key).
+- [x] **Phase 4:** background tasks on a worker, web search, Send button with a recipient
+  allowlist
 - [ ] **Phase 5:** Slack channel, skills, evals
 - [ ] **Phase 6:** WhatsApp channel + job application dashboard
 - [ ] **Phase 7:** cloud deployment
