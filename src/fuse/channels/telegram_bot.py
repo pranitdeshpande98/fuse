@@ -370,7 +370,7 @@ def build_application(settings: Settings) -> Application:
 def main() -> None:
     use_selector_event_loop_on_windows()
     settings = get_settings()
-    configure_logging(settings.log_level)
+    configure_logging(settings.log_level, "bot")
     enable_tracing(settings)
     if not settings.telegram_bot_token.get_secret_value():
         raise SystemExit("Set TELEGRAM_BOT_TOKEN in .env")

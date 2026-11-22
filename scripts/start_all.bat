@@ -18,7 +18,8 @@ if exist "%JOB_ALERTS_DIR%\start.bat" (
     echo Job Alerts not found at %JOB_ALERTS_DIR%: skipping it.
 )
 
-echo Starting Fuse (bot + worker); its log is also saved to logs\fuse.log...
-start "Fuse" cmd /k "uv run fuse 2>&1 | powershell -NoProfile -Command \"$input | Tee-Object -FilePath logs\fuse.log\""
+echo Starting Fuse (bot + worker). Logs are also saved to logs\bot.log and logs\worker.log.
+set "FUSE_LOG_DIR=%CD%\logs"
+start "Fuse" cmd /k uv run fuse
 echo Done. You can close this window.
 timeout /t 5 >nul

@@ -115,7 +115,7 @@ class Worker:
         self.retry_base, self.poll_seconds = retry_base, poll_seconds
         self.max_tokens = max_tokens
         self.heartbeat = heartbeat  # lets /status tell whether a worker is alive
-        self._last_beat = 0.0
+        self._last_beat: float | None = None  # None: beat right away on start
 
     async def _drive(self, task: Task) -> AgentReply:
         """Start, resume after an approval, or continue after a crash."""
@@ -217,7 +217,9 @@ class Worker:
 
     async def _beat(self) -> None:
         now = asyncio.get_running_loop().time()
-        if self.heartbeat is None or now - self._last_beat < HEARTBEAT_SECONDS:
+        if self.heartbeat is None:
+            return
+        if self._last_beat is not None and now - self._last_beat < HEARTBEAT_SECONDS:
             return
         self._last_beat = now
         try:
@@ -316,7 +318,7 @@ def main() -> None:
     from fuse.logging_setup import configure_logging
 
     use_selector_event_loop_on_windows()
-    configure_logging(get_settings().log_level)
+    configure_logging(get_settings().log_level, "worker")
     try:
         asyncio.run(_main())
     except KeyboardInterrupt:
