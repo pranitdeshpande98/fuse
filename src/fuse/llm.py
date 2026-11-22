@@ -43,6 +43,22 @@ def build_llm(settings: Settings, tools: Sequence[BaseTool] = ()) -> Runnable:
     return primary.with_fallbacks(fallbacks) if fallbacks else primary
 
 
+def build_structured_llm(settings: Settings, schema: type) -> Runnable:
+    """A model that answers with an instance of `schema` (a pydantic class), with the same
+    fallback chain. Uses tool calling under the hood, which every provider here supports."""
+    providers = settings.llm_providers()
+    if not providers:
+        raise RuntimeError("No LLM provider configured: set LLM_PRIMARY_API_KEY in .env")
+    models = [
+        build_chat_model(p, settings.llm_timeout_seconds).with_structured_output(
+            schema, method="function_calling"
+        )
+        for p in providers
+    ]
+    primary, *fallbacks = models
+    return primary.with_fallbacks(fallbacks) if fallbacks else primary
+
+
 def main() -> None:
     question = " ".join(sys.argv[1:]) or "Say hello in five words."
     reply = build_llm(get_settings()).invoke(question)
