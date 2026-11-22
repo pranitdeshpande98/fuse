@@ -2,6 +2,8 @@
 
 from datetime import timedelta
 
+from fuse.approval_ui import after_allowing, approval_buttons, approval_text
+from fuse.contacts import ContactStore
 from fuse.proactive.notify import Button, Notifier, split_message
 from fuse.tasks.queue import Task, TaskStore
 
@@ -9,12 +11,9 @@ TASK_BUTTON = "tk"
 KEY_CHARS = 16  # enough of the action key to match it; Telegram allows 64 bytes per button
 
 
-def task_buttons(task_id: int, approval: dict) -> list[Button]:
+def task_buttons(task_id: int, approval: dict) -> list[list[Button]]:
     key = approval["action_key"][:KEY_CHARS]
-    return [
-        Button("Approve", f"{TASK_BUTTON}:approve:{task_id}:{key}"),
-        Button("Reject", f"{TASK_BUTTON}:reject:{task_id}:{key}"),
-    ]
+    return approval_buttons(approval, lambda verb: f"{TASK_BUTTON}:{verb}:{task_id}:{key}")
 
 
 def parse_task_button(data: str) -> tuple[str, int, str] | None:
@@ -37,13 +36,37 @@ async def decide_task_approval(tasks: TaskStore, data: str) -> str:
     full_key = pending.get("action_key", "")
     if not task or task.status != "waiting_approval" or not full_key.startswith(key_prefix):
         return "This is no longer waiting for approval."
-    approved = choice in ("approve", "send", "draft")
+    if choice not in ("approve", "send", "reject"):
+        return "That button isn't valid any more."
+    approved = choice in ("approve", "send")
     decision: dict = {"approved": approved}
-    if choice in ("send", "draft"):
-        decision["mode"] = choice
+    if choice == "send":
+        decision["mode"] = "send"
     if not await tasks.submit_decision(task_id, full_key, decision):
         return "This is no longer waiting for approval."
-    return f"{'Approved' if approved else 'Rejected'}. Task #{task_id} continues."
+    verb = "Sending" if choice == "send" else ("Approved" if approved else "Rejected")
+    return f"{verb}. Task #{task_id} continues."
+
+
+async def allow_task_recipients(
+    tasks: TaskStore, contacts: ContactStore, data: str
+) -> tuple[str, list[list[Button]] | None]:
+    """ "Always allow" on a task's email: add the blocked recipients to your contacts and
+    return the new buttons, now with Send."""
+    parsed = parse_task_button(data)
+    task = await tasks.get(parsed[1]) if parsed else None
+    pending = (task.pending or {}) if task else {}
+    if (
+        not parsed
+        or task is None
+        or task.status != "waiting_approval"
+        or not pending.get("action_key", "").startswith(parsed[2])
+    ):
+        return "This is no longer waiting for approval.", None
+    for address in pending.get("blocked") or []:
+        await contacts.add(address, source="always allow")
+    allowed = ", ".join(pending.get("blocked") or [])
+    return f"Added {allowed} to your contacts.", task_buttons(task.id, after_allowing(pending))
 
 
 STATUS_LABEL = {
@@ -72,7 +95,7 @@ class TelegramTaskReporter:
         await self._notifier.send(f"Task #{task_id}: {text}")
 
     async def needs_approval(self, task: Task, approval: dict) -> None:
-        text = f"Task #{task.id} would like to do this:\n\n{approval['preview']}"
+        text = f"Task #{task.id} would like to do this:\n\n{approval_text(approval)}"
         await self._notifier.send(text, task_buttons(task.id, approval))
 
     async def finished(self, task: Task, result: str) -> None:

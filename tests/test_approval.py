@@ -74,7 +74,7 @@ async def test_read_tools_never_ask_for_approval():
 
 
 class FailingSink:
-    async def save_draft(self, to, subject, body):
+    async def save_draft(self, to, subject, body, *args):
         raise DraftError("Google is not connected. Run: uv run python -m fuse.google.auth")
 
 
@@ -90,5 +90,5 @@ async def test_a_failed_draft_is_reported_and_recorded():
 
     reply = await runner.resume("t1", approved=True)
     assert reply.text == "Sorry, that failed."
-    assert "could not be saved" in model.calls[-1][-1].content  # the model was told why
+    assert "didn't work" in model.calls[-1][-1].content  # the model was told why
     assert (await store.get(key)).status == "failed"

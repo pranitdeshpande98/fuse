@@ -115,8 +115,10 @@ class GoogleApiReader:
                 {
                     "from": headers.get("from", ""),
                     "to": headers.get("to", ""),
+                    "cc": headers.get("cc", ""),
                     "subject": headers.get("subject", "(no subject)"),
                     "date": headers.get("date", ""),
+                    "message_id": headers.get("message-id", ""),
                     "body": _plain_text(payload) or msg.get("snippet", ""),
                 }
             )

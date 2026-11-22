@@ -204,7 +204,7 @@ async def test_task_approval_buttons_resume_the_task_end_to_end():
     await worker.run_one()
     text, buttons = notifier.sent[-1]
     assert "To: pat@acme.com" in text
-    assert [b.label for b in buttons] == ["Approve", "Reject"]
+    assert [b.label for b in buttons] == ["Save as draft", "Reject", "Always allow pat@acme.com"]
 
     assert await decide_task_approval(tasks, "tk:approve:999:abc") == (
         "This is no longer waiting for approval."

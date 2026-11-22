@@ -31,8 +31,28 @@ class Button:
     data: str  # what the button sends back when tapped (max 64 bytes on Telegram)
 
 
+Buttons = list[Button] | list[list[Button]]  # one row, or several rows
+
+
+def button_rows(buttons: Buttons | None) -> list[list[Button]]:
+    if not buttons:
+        return []
+    if isinstance(buttons[0], Button):
+        return [list(buttons)]  # type: ignore[arg-type]
+    return [list(row) for row in buttons]  # type: ignore[union-attr]
+
+
+def telegram_markup(buttons: Buttons | None) -> InlineKeyboardMarkup | None:
+    rows = button_rows(buttons)
+    if not rows:
+        return None
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton(b.label, callback_data=b.data) for b in row] for row in rows]
+    )
+
+
 class Notifier(Protocol):
-    async def send(self, text: str, buttons: list[Button] | None = None) -> None: ...
+    async def send(self, text: str, buttons: Buttons | None = None) -> None: ...
 
 
 class TelegramNotifier:
@@ -42,15 +62,10 @@ class TelegramNotifier:
         self._bot = bot
         self._chat_id = chat_id
 
-    async def send(self, text: str, buttons: list[Button] | None = None) -> None:
-        markup = (
-            InlineKeyboardMarkup(
-                [[InlineKeyboardButton(b.label, callback_data=b.data) for b in buttons]]
-            )
-            if buttons
-            else None
+    async def send(self, text: str, buttons: Buttons | None = None) -> None:
+        await self._bot.send_message(
+            self._chat_id, text[:TELEGRAM_LIMIT], reply_markup=telegram_markup(buttons)
         )
-        await self._bot.send_message(self._chat_id, text[:TELEGRAM_LIMIT], reply_markup=markup)
 
 
 @dataclass
@@ -59,8 +74,9 @@ class RecordingNotifier:
 
     sent: list[tuple[str, list[Button]]] = field(default_factory=list)
 
-    async def send(self, text: str, buttons: list[Button] | None = None) -> None:
-        self.sent.append((text, list(buttons or [])))
+    async def send(self, text: str, buttons: Buttons | None = None) -> None:
+        # Rows are flattened here: tests care which buttons there are, in order.
+        self.sent.append((text, [b for row in button_rows(buttons) for b in row]))
 
     @property
     def texts(self) -> list[str]:

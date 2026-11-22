@@ -19,7 +19,7 @@ BUTTON_PREFIX = "ev"
 # the content as untrusted, and the draft still needs your Approve.
 DRAFT_REQUEST = (
     "Please draft a reply to the email thread with ID {thread_id}. "
-    "Read the thread first, then propose the draft."
+    "Read the thread first, then propose the draft with reply_to_thread_id={thread_id}."
 )
 
 

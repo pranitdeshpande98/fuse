@@ -11,6 +11,7 @@ from psycopg_pool import AsyncConnectionPool
 
 from fuse.actions import PostgresActionStore
 from fuse.config import Settings
+from fuse.contacts import PostgresContactStore
 from fuse.crypto import SecretBox
 from fuse.db import open_pool
 from fuse.google.auth import TokenStore
@@ -33,6 +34,7 @@ class Services:
     memory: PostgresMemoryStore
     tokens: TokenStore | None
     tasks: PostgresTaskStore
+    contacts: PostgresContactStore
 
 
 @asynccontextmanager
@@ -60,5 +62,7 @@ async def open_services(settings: Settings) -> AsyncIterator[Services]:
 
         tasks = PostgresTaskStore(pool)
         await tasks.ensure_schema()
+        contacts = PostgresContactStore(pool)
+        await contacts.ensure_schema()
 
-        yield Services(pool, checkpointer, actions, google, drafts, memory, tokens, tasks)
+        yield Services(pool, checkpointer, actions, google, drafts, memory, tokens, tasks, contacts)

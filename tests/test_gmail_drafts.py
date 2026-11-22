@@ -68,3 +68,34 @@ async def test_gmail_errors_become_a_clear_draft_error(monkeypatch):
     sink = sink_with(monkeypatch, error=HttpError(httplib2.Response({"status": 403}), b""))
     with pytest.raises(DraftError, match="403"):
         await sink.save_draft("pat@example.com", "Hi", "Hello")
+
+
+class FakeGmailSend:
+    def __init__(self):
+        self.sent = []
+
+    def users(self):
+        return self
+
+    def messages(self):
+        return self
+
+    def send(self, userId, body):
+        self.sent.append(body)
+        return self
+
+    def execute(self):
+        return {"id": "msg-1"}
+
+
+async def test_send_builds_a_threaded_reply(monkeypatch):
+    gmail = FakeGmailSend()
+    sink = sink_with(monkeypatch, gmail)
+    text = await sink.send(
+        "pat@acme.com", "Re: Friday", "Monday works.", "sam@corp.com", "t-acme", "<m1@acme.com>"
+    )
+    assert text.startswith("Sent to pat@acme.com, cc sam@corp.com")
+    (body,) = gmail.sent
+    assert body["threadId"] == "t-acme"
+    raw = email.message_from_bytes(base64.urlsafe_b64decode(body["raw"]))
+    assert raw["Cc"] == "sam@corp.com" and raw["In-Reply-To"] == "<m1@acme.com>"

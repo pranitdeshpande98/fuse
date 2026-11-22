@@ -6,7 +6,7 @@ from datetime import timedelta
 from typing import Any
 
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import Update
 from telegram.constants import ChatAction
 from telegram.ext import (
     Application,
@@ -20,8 +20,10 @@ from telegram.ext import (
 
 from fuse.agent.factory import build_runner
 from fuse.agent.runner import AgentReply, AgentRunner
+from fuse.approval_ui import after_allowing, approval_buttons, approval_text
 from fuse.compat import use_selector_event_loop_on_windows
 from fuse.config import Settings, get_settings
+from fuse.contacts import ContactStore, contacts_text
 from fuse.google.reader import GoogleApiReader
 from fuse.llm import build_llm, build_structured_llm
 from fuse.logging_setup import configure_logging
@@ -36,12 +38,17 @@ from fuse.proactive.gmail_watch import GmailWatcher
 from fuse.proactive.jobs import PostgresJobLog
 from fuse.proactive.meetings import MeetingReminders
 from fuse.proactive.nightly import NightlyConsolidation
-from fuse.proactive.notify import TelegramNotifier
+from fuse.proactive.notify import TelegramNotifier, split_message, telegram_markup
 from fuse.proactive.schedule import Scheduler, SystemClock, parse_hhmm
 from fuse.proactive.store import MuteStore, PostgresCursorStore, PostgresMuteStore
 from fuse.services import open_services
 from fuse.tasks.queue import TaskStore
-from fuse.tasks.report import cancel_text, decide_task_approval, tasks_text
+from fuse.tasks.report import (
+    allow_task_recipients,
+    cancel_text,
+    decide_task_approval,
+    tasks_text,
+)
 from fuse.tasks.tools import make_task_tools, start_task
 from fuse.tracing import enable_tracing
 
@@ -62,23 +69,19 @@ def thread_id_for(chat_id: int) -> str:
 
 
 async def send_reply(update: Update, reply: AgentReply) -> None:
-    """Plain text, or a preview with Approve / Reject buttons."""
+    """Plain text, or a preview with its approval buttons (Send / Save as draft / Reject for
+    an email, Approve / Reject for anything else)."""
     chat = update.effective_chat
     assert chat is not None
     if reply.kind == "approval":
-        key = reply.approval["action_key"]
-        buttons = InlineKeyboardMarkup(
-            [
-                [
-                    InlineKeyboardButton("Approve", callback_data=f"approve:{key}"),
-                    InlineKeyboardButton("Reject", callback_data=f"reject:{key}"),
-                ]
-            ]
-        )
-        text = f"{reply.text}\n\n{reply.approval['preview']}"
-        await chat.send_message(text[:TELEGRAM_LIMIT], reply_markup=buttons)
+        payload = reply.approval
+        key = payload["action_key"]
+        buttons = approval_buttons(payload, lambda verb: f"{verb}:{key}")
+        text = f"{reply.text}\n\n{approval_text(payload)}"
+        await chat.send_message(text[:TELEGRAM_LIMIT], reply_markup=telegram_markup(buttons))
     else:
-        await chat.send_message(reply.text[:TELEGRAM_LIMIT])
+        for part in split_message(reply.text):
+            await chat.send_message(part)
 
 
 async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -96,7 +99,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 
 async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Called when you tap Approve or Reject."""
+    """Called when you tap Send, Save as draft / Approve, Reject or Always allow."""
     query = update.callback_query
     if query is None or update.effective_chat is None:
         return
@@ -105,7 +108,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await query.answer()  # buttons pressed by anyone else are ignored
         return
 
-    decision, _, key = (query.data or "").partition(":")
+    verb, _, key = (query.data or "").partition(":")
     thread_id = thread_id_for(update.effective_chat.id)
     runner: AgentRunner = context.application.bot_data["runner"]
 
@@ -116,12 +119,24 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await query.edit_message_reply_markup(reply_markup=None)
         return
 
-    approved = decision == "approve"
-    await query.answer("Approved" if approved else "Rejected")
+    if verb == "allow":
+        contacts: ContactStore = context.application.bot_data["contacts"]
+        for address in pending.get("blocked") or []:
+            await contacts.add(address, source="always allow")
+        await query.answer("Added to your contacts")
+        buttons = approval_buttons(after_allowing(pending), lambda v: f"{v}:{key}")
+        await query.edit_message_reply_markup(reply_markup=telegram_markup(buttons))
+        return
+
+    approved = verb in ("approve", "send")
+    labels = {"send": "Sending", "approve": "Approved", "reject": "Rejected"}
+    await query.answer(labels.get(verb, "Done"))
     await query.edit_message_reply_markup(reply_markup=None)  # buttons work only once
-    log.info("action %s in %s", "approved" if approved else "rejected", thread_id)
+    log.info("action %s in %s", verb, thread_id)
     try:
-        reply = await runner.resume(thread_id, approved=approved)
+        reply = await runner.resume(
+            thread_id, approved=approved, mode="send" if verb == "send" else None
+        )
     except Exception:
         log.exception("agent failed")
         reply = AgentReply("text", "Something went wrong on my side. Check the terminal logs.")
@@ -162,8 +177,8 @@ async def on_alert_button(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 
 async def on_task_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Approve / Reject on something a background task wants to do. The bot only records
-    your decision in Postgres; the worker, a separate process, resumes the task."""
+    """Buttons on something a background task wants to do. The bot only records your
+    decision in Postgres; the worker, a separate process, resumes the task."""
     query = update.callback_query
     if query is None or update.effective_chat is None:
         return
@@ -171,7 +186,15 @@ async def on_task_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if not is_allowed(update.effective_chat.id, settings.telegram_allowed_chat_id):
         await query.answer()
         return
-    text = await decide_task_approval(context.application.bot_data["tasks"], query.data or "")
+    tasks = context.application.bot_data["tasks"]
+    if (query.data or "").startswith("tk:allow:"):
+        text, buttons = await allow_task_recipients(
+            tasks, context.application.bot_data["contacts"], query.data or ""
+        )
+        await query.answer(text[:200])
+        await query.edit_message_reply_markup(reply_markup=telegram_markup(buttons))
+        return
+    text = await decide_task_approval(tasks, query.data or "")
     await query.answer(text[:200])
     await query.edit_message_reply_markup(reply_markup=None)
     await update.effective_chat.send_message(text)
@@ -209,6 +232,13 @@ async def on_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def on_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/cancel <id>: stop a background task."""
     text = await cancel_text(context.application.bot_data["tasks"], " ".join(context.args or []))
+    await update.effective_chat.send_message(text)  # type: ignore[union-attr]
+
+
+async def on_contacts(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/contacts [add|remove <address>]: who Fuse may send email to."""
+    contacts: ContactStore = context.application.bot_data["contacts"]
+    text = await contacts_text(contacts, " ".join(context.args or []))
     await update.effective_chat.send_message(text)  # type: ignore[union-attr]
 
 
@@ -338,7 +368,9 @@ def build_application(settings: Settings) -> Application:
             services.drafts,
             memory,
             extra_tools=make_task_tools(services.tasks, settings.task_max_attempts),
+            contacts=services.contacts,
         )
+        app.bot_data["contacts"] = services.contacts
         app.bot_data["tasks"] = services.tasks
         app.bot_data["settings"] = settings
         app.bot_data["memory"] = memory
@@ -366,7 +398,8 @@ def build_application(settings: Settings) -> Application:
     app.add_handler(CommandHandler("tasks", on_tasks, filters=only_me))
     app.add_handler(CommandHandler("cancel", on_cancel, filters=only_me))
     app.add_handler(CommandHandler("unmute", on_unmute, filters=only_me))
-    app.add_handler(CallbackQueryHandler(on_button, pattern=r"^(approve|reject):"))
+    app.add_handler(CommandHandler("contacts", on_contacts, filters=only_me))
+    app.add_handler(CallbackQueryHandler(on_button, pattern=r"^(approve|reject|send|allow):"))
     app.add_handler(CallbackQueryHandler(on_alert_button, pattern=r"^ev:"))
     app.add_handler(CallbackQueryHandler(on_task_button, pattern=r"^tk:"))
     return app

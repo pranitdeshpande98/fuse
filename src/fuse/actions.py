@@ -21,13 +21,22 @@ SCHEMA = [
         tool            TEXT        NOT NULL,
         args            JSONB       NOT NULL,
         status          TEXT        NOT NULL CHECK (status IN
-                            ('pending', 'approved', 'rejected', 'executed', 'failed')),
+                            ('pending', 'approved', 'rejected', 'sending', 'executed',
+                             'failed')),
         result          TEXT,
         created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
         updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
     )
     """,
     "CREATE INDEX IF NOT EXISTS actions_status_idx ON actions (status)",
+    # Phase 4 added the 'sending' status. Tables created earlier get the new rule here.
+    """
+    DO $$ BEGIN
+        ALTER TABLE actions DROP CONSTRAINT IF EXISTS actions_status_check;
+        ALTER TABLE actions ADD CONSTRAINT actions_status_check CHECK (status IN
+            ('pending', 'approved', 'rejected', 'sending', 'executed', 'failed'));
+    END $$
+    """,
 ]
 
 
@@ -61,6 +70,40 @@ async def execute_once(store: ActionStore, key: str, run: Callable[[], Awaitable
     try:
         result = await run()
     except Exception as exc:
+        await store.set_status(key, "failed", f"{type(exc).__name__}: {exc}")
+        raise
+    await store.set_status(key, "executed", result)
+    return result
+
+
+ALREADY_SENDING = (
+    "This email may already have been sent: Fuse stopped in the middle of sending it. "
+    "Check your Gmail Sent folder before sending it again."
+)
+
+
+async def execute_at_most_once(
+    store: ActionStore, key: str, run: Callable[[], Awaitable[str]]
+) -> str:
+    """For actions that can't be undone, like sending an email.
+
+    execute_once retries an action whose outcome is unknown, which is right for a draft (a
+    duplicate draft is harmless) and wrong for an email (a duplicate goes to someone's
+    inbox). Here the action is marked "sending" *before* it starts. If Fuse crashes mid-way
+    and comes back, it finds "sending", doesn't know whether the email went out, and asks
+    you to check instead of sending again. At most once, never twice.
+    """
+    existing = await store.get(key)
+    if existing and existing.status == "executed":
+        return existing.result or "Already sent."
+    if existing and existing.status == "sending":
+        return ALREADY_SENDING
+    await store.set_status(key, "sending")
+    try:
+        result = await run()
+    except Exception as exc:
+        # The send call failed before or during the request. Gmail rejects or accepts a
+        # message atomically, so an error here means it was not sent.
         await store.set_status(key, "failed", f"{type(exc).__name__}: {exc}")
         raise
     await store.set_status(key, "executed", result)
