@@ -208,7 +208,7 @@ async def _main(dry_run: bool) -> None:
     from fuse.memory.store import PostgresMemoryStore
 
     settings = get_settings()
-    extractor = build_structured_llm(settings, ExtractedFacts)
+    extractor = build_structured_llm(settings, ExtractedFacts, tier="light")
     async with open_pool(settings.database_url.get_secret_value()) as pool:
         checkpointer = AsyncPostgresSaver(pool)
         await checkpointer.setup()

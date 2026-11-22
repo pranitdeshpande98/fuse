@@ -7,6 +7,7 @@ same request is retried on the fallback.
 
 import sys
 from collections.abc import Sequence
+from typing import Literal
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.runnables import Runnable
@@ -27,13 +28,16 @@ def build_chat_model(provider: LLMProvider, timeout: float) -> BaseChatModel:
     )
 
 
-def build_llm(settings: Settings, tools: Sequence[BaseTool] = ()) -> Runnable:
+Tier = Literal["main", "light"]
+
+
+def build_llm(settings: Settings, tools: Sequence[BaseTool] = (), tier: Tier = "main") -> Runnable:
     """The primary model, falling back to the next configured provider on any error.
 
     Tools are bound to each model before the fallback chain is built, so a fallback model
     can call the same tools as the primary.
     """
-    providers = settings.llm_providers()
+    providers = settings.llm_providers(tier)
     if not providers:
         raise RuntimeError("No LLM provider configured: set LLM_PRIMARY_API_KEY in .env")
     models = [build_chat_model(p, settings.llm_timeout_seconds) for p in providers]
@@ -43,10 +47,10 @@ def build_llm(settings: Settings, tools: Sequence[BaseTool] = ()) -> Runnable:
     return primary.with_fallbacks(fallbacks) if fallbacks else primary
 
 
-def build_structured_llm(settings: Settings, schema: type) -> Runnable:
+def build_structured_llm(settings: Settings, schema: type, tier: Tier = "main") -> Runnable:
     """A model that answers with an instance of `schema` (a pydantic class), with the same
     fallback chain. Uses tool calling under the hood, which every provider here supports."""
-    providers = settings.llm_providers()
+    providers = settings.llm_providers(tier)
     if not providers:
         raise RuntimeError("No LLM provider configured: set LLM_PRIMARY_API_KEY in .env")
     models = [

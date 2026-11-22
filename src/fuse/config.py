@@ -41,6 +41,16 @@ class Settings(BaseSettings):
     llm_fallback_api_key: SecretStr = SecretStr("")
     llm_fallback_model: str = "gpt-oss-120b"
 
+    # A third provider, optional: tried after the fallback.
+    llm_fallback2_base_url: str = ""
+    llm_fallback2_api_key: SecretStr = SecretStr("")
+    llm_fallback2_model: str = ""
+
+    # Background work (email triage, the brief, memory consolidation) uses this smaller model
+    # on the primary provider first, keeping the big model's daily quota for your chats.
+    # Groq counts limits per model, so this is quota the big model doesn't use. Empty = off.
+    llm_light_model: str = "openai/gpt-oss-20b"
+
     llm_timeout_seconds: float = 60.0
 
     # Agent (step 7): max model + tool steps in one turn, so a loop can't burn the free quota.
@@ -83,16 +93,23 @@ class Settings(BaseSettings):
     task_max_steps: int = 40
     task_timeout_minutes: int = 15
     task_max_attempts: int = 3
-    task_max_tokens: int = 200_000  # per run; free tiers allow roughly 100k-1M a day
+    # Per run. Groq's free tier allows 200k tokens a day per model, so one task must not
+    # be able to use all of it.
+    task_max_tokens: int = 40_000
 
     # Tracing (step 11): send a record of every agent run to LangSmith for debugging.
     langsmith_tracing: bool = False
     langsmith_api_key: SecretStr = SecretStr("")
     langsmith_project: str = "fuse"
 
-    def llm_providers(self) -> list[LLMProvider]:
-        """Configured providers in priority order. A provider without an API key is skipped."""
-        candidates = [
+    def llm_providers(self, tier: Literal["main", "light"] = "main") -> list[LLMProvider]:
+        """Configured providers in the order to try them. A provider without an API key is
+        skipped, and the same model on the same endpoint is only tried once.
+
+        "main" is for chatting with you and background tasks. "light" tries the smaller
+        model first, for high-volume background work, then falls back to the main chain.
+        """
+        main = [
             LLMProvider(
                 name="primary",
                 base_url=self.llm_primary_base_url,
@@ -105,8 +122,30 @@ class Settings(BaseSettings):
                 api_key=self.llm_fallback_api_key,
                 model=self.llm_fallback_model,
             ),
+            LLMProvider(
+                name="fallback2",
+                base_url=self.llm_fallback2_base_url,
+                api_key=self.llm_fallback2_api_key,
+                model=self.llm_fallback2_model,
+            ),
         ]
-        return [p for p in candidates if p.api_key.get_secret_value()]
+        candidates = main
+        if tier == "light" and self.llm_light_model:
+            light = LLMProvider(
+                name="light",
+                base_url=self.llm_primary_base_url,
+                api_key=self.llm_primary_api_key,
+                model=self.llm_light_model,
+            )
+            candidates = [light, *main]
+        chosen: list[LLMProvider] = []
+        seen: set[tuple[str, str]] = set()
+        for p in candidates:
+            key = (p.base_url.rstrip("/"), p.model)
+            if p.api_key.get_secret_value() and p.base_url and p.model and key not in seen:
+                seen.add(key)
+                chosen.append(p)
+        return chosen
 
 
 @lru_cache

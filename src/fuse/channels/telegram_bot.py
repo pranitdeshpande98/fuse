@@ -287,7 +287,7 @@ async def setup_proactive(
     brief = MorningBrief(
         clock,
         notifier,
-        build_llm(settings),
+        build_llm(settings, tier="light"),
         google,
         memory,
         held=EventHeldItems(events),
@@ -296,7 +296,7 @@ async def setup_proactive(
     scheduler = Scheduler(clock, job_log)
     scheduler.add_daily("morning_brief", parse_hhmm(settings.brief_time), brief.run)
 
-    extractor = build_structured_llm(settings, ExtractedFacts)
+    extractor = build_structured_llm(settings, ExtractedFacts, tier="light")
     nightly = NightlyConsolidation(
         lambda: consolidate(pool, checkpointer, extractor, memory), events, clock
     )
@@ -313,7 +313,7 @@ async def setup_proactive(
         engine = DecisionEngine(
             events,
             mutes,
-            build_structured_llm(settings, TriageResult),
+            build_structured_llm(settings, TriageResult, tier="light"),
             clock,
             AlertSender(notifier, on_sent=add_to_conversation),
             quiet_start=parse_hhmm(settings.quiet_hours_start),

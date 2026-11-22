@@ -239,7 +239,7 @@ async def _main() -> None:
     from fuse.proactive.decide import TriageResult
 
     settings = get_settings()
-    triager = build_structured_llm(settings, TriageResult)
+    triager = build_structured_llm(settings, TriageResult, tier="light")
     embedder = FastEmbedder(settings.embedding_model, settings.fastembed_cache_dir)
     result = await run_triage_eval(triager, embedder)
     print(f"Model: {settings.llm_primary_model}")
