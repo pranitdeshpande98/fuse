@@ -167,3 +167,18 @@ def test_without_button_keeps_the_other_track_buttons():
     assert [b.callback_data for b in left.inline_keyboard[0]] == ["jt:1", "jt:3"]
     single = InlineKeyboardMarkup([[InlineKeyboardButton("Track 1", callback_data="jt:1")]])
     assert without_button(single, "jt:1") is None
+
+
+async def test_reminder_command_and_buttons_are_routed():
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from fuse.proactive.schedule import FixedClock
+    from fuse.reminders.store import InMemoryReminderStore
+
+    clock = FixedClock(datetime(2026, 11, 22, 10, 0, tzinfo=ZoneInfo("America/Chicago")))
+    store = InMemoryReminderStore()
+    r = await store.add("Call Pat", clock.now())
+    core, *_ = make_core([], reminders=store, clock=clock)
+    assert "Call Pat" in (await core.command(THREAD, "reminders"))[0].text
+    assert (await core.button(THREAD, f"rm:done:{r.id}")).toast == "Done."

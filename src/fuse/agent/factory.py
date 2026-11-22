@@ -21,6 +21,9 @@ from fuse.jobs.tools import make_job_tools
 from fuse.llm import build_llm
 from fuse.memory.store import MemoryStore
 from fuse.memory.tools import make_memory_tools
+from fuse.proactive.schedule import SystemClock
+from fuse.reminders.service import make_reminder_tools
+from fuse.reminders.store import ReminderStore
 from fuse.skills.loader import Skill, skills_prompt
 from fuse.skills.tools import make_skill_tools
 from fuse.tools.basic import make_basic_tools
@@ -38,6 +41,7 @@ def build_tools(
     skills: list[Skill] | None = None,
     jobs: JobStore | None = None,
     job_alerts: JobAlertsClient | None = None,
+    reminders: ReminderStore | None = None,
 ) -> list[BaseTool]:
     return [
         *make_basic_tools(settings.user_timezone),
@@ -48,6 +52,7 @@ def build_tools(
         *(make_skill_tools(skills) if skills else []),
         *(make_job_tools(jobs) if jobs else []),
         *(make_job_alerts_tools(job_alerts) if job_alerts else []),
+        *(make_reminder_tools(reminders, SystemClock(settings.user_timezone)) if reminders else []),
     ]
 
 
@@ -65,9 +70,21 @@ def build_runner(
     skills: list[Skill] | None = None,
     jobs: JobStore | None = None,
     job_alerts: JobAlertsClient | None = None,
+    reminders: ReminderStore | None = None,
 ) -> AgentRunner:
     tools = [
-        *build_tools(settings, actions, google, drafts, memory, contacts, skills, jobs, job_alerts),
+        *build_tools(
+            settings,
+            actions,
+            google,
+            drafts,
+            memory,
+            contacts,
+            skills,
+            jobs,
+            job_alerts,
+            reminders,
+        ),
         *extra_tools,
     ]
     system_prompt += skills_prompt(skills or [])

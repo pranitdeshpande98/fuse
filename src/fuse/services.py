@@ -21,7 +21,8 @@ from fuse.jobalerts.client import JobAlertsClient
 from fuse.jobs.store import PostgresJobStore
 from fuse.memory.embeddings import FastEmbedder
 from fuse.memory.store import PostgresMemoryStore
-from fuse.skills.loader import Skill
+from fuse.reminders.store import PostgresReminderStore
+from fuse.skills.loader import Skill, load_skills
 from fuse.tasks.queue import PostgresTaskStore
 
 log = logging.getLogger("fuse.services")
@@ -41,6 +42,7 @@ class Services:
     jobs: PostgresJobStore
     skills: list[Skill]
     job_alerts: JobAlertsClient | None
+    reminders: PostgresReminderStore
 
 
 @asynccontextmanager
@@ -71,4 +73,26 @@ async def open_services(settings: Settings) -> AsyncIterator[Services]:
         contacts = PostgresContactStore(pool)
         await contacts.ensure_schema()
 
-        yield Services(pool, checkpointer, actions, google, drafts, memory, tokens, tasks, contacts)
+        jobs = PostgresJobStore(pool)
+        await jobs.ensure_schema()
+        reminders = PostgresReminderStore(pool)
+        await reminders.ensure_schema()
+        skills = load_skills(settings.skills_dir)
+        log.info("Skills: %s", ", ".join(s.name for s in skills) or "none found")
+        job_alerts = JobAlertsClient(settings.job_alerts_url) if settings.job_alerts_url else None
+
+        yield Services(
+            pool=pool,
+            checkpointer=checkpointer,
+            actions=actions,
+            google=google,
+            drafts=drafts,
+            memory=memory,
+            tokens=tokens,
+            tasks=tasks,
+            contacts=contacts,
+            jobs=jobs,
+            skills=skills,
+            job_alerts=job_alerts,
+            reminders=reminders,
+        )

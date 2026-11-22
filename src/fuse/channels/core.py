@@ -22,7 +22,11 @@ from fuse.memory.store import MemoryStore
 from fuse.proactive.alerts import AlertActions
 from fuse.proactive.events import EventStore
 from fuse.proactive.notify import Button, split_message
+from fuse.proactive.schedule import Clock
 from fuse.proactive.store import MuteStore
+from fuse.reminders.service import BUTTON as REMINDER_BUTTON
+from fuse.reminders.service import handle_reminder_button, reminders_text
+from fuse.reminders.store import ReminderStore
 from fuse.skills.loader import Skill
 from fuse.skills.tools import skills_text, start_skill
 from fuse.tasks.queue import TaskStore
@@ -79,12 +83,15 @@ class ChatCore:
         job_alerts: JobAlertsClient | None = None,
         scan_runner: ScanRunner | None = None,
         events: EventStore | None = None,
+        reminders: ReminderStore | None = None,
+        clock: Clock | None = None,
     ) -> None:
         self.runner, self.memory, self.tasks = runner, memory, tasks
         self.contacts, self.mutes, self.alert_actions = contacts, mutes, alert_actions
         self.brief, self.task_max_attempts = brief, task_max_attempts
         self.skills, self.jobs = skills or [], jobs
         self.job_alerts, self.scan_runner, self.events = job_alerts, scan_runner, events
+        self.reminders, self.clock = reminders, clock
         self.commands: dict[str, Command] = {
             "brief": Command("today's brief, now", self._brief),
             "task": Command("start a background task: /task <goal>", self._task),
@@ -99,6 +106,7 @@ class ChatCore:
             "jobs": Command("your job applications", self._jobs),
             "scan": Command("scan your Job Alerts portals now", self._scan),
             "dashboard": Command("Job Alerts status and failing portals", self._dashboard),
+            "reminders": Command("your upcoming reminders", self._reminders),
         }
 
     # --- rendering ---------------------------------------------------------------------
@@ -133,6 +141,11 @@ class ChatCore:
                 return await self._task_button(data)
             if data.startswith(f"{TRACK_BUTTON}:"):
                 return await self._track_button(data)
+            if data.startswith(f"{REMINDER_BUTTON}:"):
+                if self.reminders is None or self.clock is None:
+                    return ButtonResult(toast="Reminders aren't set up.")
+                text = await handle_reminder_button(self.reminders, self.clock, data)
+                return ButtonResult(toast=text, messages=[Outgoing(text)])
             return await self._approval_button(thread_id, data)
         except Exception:
             log.exception("button failed")
@@ -268,6 +281,11 @@ class ChatCore:
             return self._one("The job tracker isn't set up.")
         return self._one(await jobs_text(self.jobs))
 
+    async def _reminders(self, thread_id: str, args: str) -> list[Outgoing]:
+        if self.reminders is None or self.clock is None:
+            return self._one("Reminders aren't set up.")
+        return self._one(await reminders_text(self.reminders, self.clock))
+
     async def _scan(self, thread_id: str, args: str) -> list[Outgoing]:
         if self.scan_runner is None:
             return self._one("Job Alerts isn't set up (JOB_ALERTS_URL is empty).")
@@ -296,6 +314,7 @@ class ChatCore:
 
 
 COMMAND_NAMES = (
+    "reminders",
     "scan",
     "dashboard",
     "skills",

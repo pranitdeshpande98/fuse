@@ -249,6 +249,7 @@ def build_worker(settings, services, tasks: TaskStore, reporter=None) -> "Worker
         skills=services.skills,
         jobs=services.jobs,
         job_alerts=services.job_alerts,
+        reminders=services.reminders,
     )
     return Worker(
         tasks,

@@ -43,6 +43,7 @@ from fuse.proactive.nightly import NightlyConsolidation
 from fuse.proactive.notify import TelegramNotifier, telegram_markup
 from fuse.proactive.schedule import Scheduler, SystemClock, parse_hhmm
 from fuse.proactive.store import PostgresCursorStore, PostgresMuteStore
+from fuse.reminders.service import ReminderSender
 from fuse.services import open_services
 from fuse.skills.loader import describe_schedule, parse_schedule
 from fuse.skills.tools import start_skill
@@ -232,6 +233,8 @@ async def setup_proactive(
             scan_runner.before = watcher.check  # bookmark set before the first scan runs
             scan_runner.after = watcher.check  # a scan's new matches arrive right after it
     if services is not None:
+        sender = ReminderSender(services.reminders, notifier, clock)
+        scheduler.add_interval("reminders", timedelta(seconds=TICK_SECONDS), sender.check)
         for skill in services.skills:
             if not skill.schedule:
                 continue
@@ -261,6 +264,8 @@ async def setup_proactive(
             job_alerts=job_alerts,
             scan_runner=scan_runner,
             events=events,
+            reminders=services.reminders if services else None,
+            clock=clock,
         ),
     )
     if settings.proactive_enabled and app.job_queue is not None:
@@ -297,6 +302,7 @@ def build_application(settings: Settings) -> Application:
             skills=services.skills,
             jobs=services.jobs,
             job_alerts=services.job_alerts,
+            reminders=services.reminders,
         )
         app.bot_data["tasks"] = services.tasks
         app.bot_data["settings"] = settings

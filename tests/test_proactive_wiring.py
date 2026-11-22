@@ -82,6 +82,7 @@ async def test_setup_with_job_alerts_and_scheduled_skills():
     from fuse.jobalerts.service import ScanRunner
     from fuse.jobs.store import InMemoryJobStore
     from fuse.proactive.notify import RecordingNotifier
+    from fuse.reminders.store import InMemoryReminderStore
     from fuse.skills.loader import load_skills
     from fuse.tasks.queue import InMemoryTaskStore
     from tests.fake_job_alerts import FakeJobAlerts
@@ -105,12 +106,21 @@ async def test_setup_with_job_alerts_and_scheduled_skills():
         memory = PostgresMemoryStore(pool, HashingEmbedder())
         await memory.ensure_schema()
         app.bot_data["runner"] = build_runner(settings, checkpointer, actions, None, None, memory)
-        app.bot_data["services"] = SimpleNamespace(
+        stand_in = dict(
             tasks=InMemoryTaskStore(),
             skills=load_skills(Path(__file__).parent.parent / "skills"),
             jobs=InMemoryJobStore(),
             contacts=None,
             job_alerts=client,
+            reminders=InMemoryReminderStore(),
+        )
+        # Every field the real Services has, so this test breaks if they drift apart.
+        from dataclasses import fields
+
+        from fuse.services import Services
+
+        app.bot_data["services"] = SimpleNamespace(
+            **{f.name: stand_in.get(f.name) for f in fields(Services)}
         )
         app.bot_data["scan_runner"] = ScanRunner(client, RecordingNotifier())
 
@@ -119,7 +129,7 @@ async def test_setup_with_job_alerts_and_scheduled_skills():
         scheduler = app.bot_data["scheduler"]
         daily = {j.name for j in scheduler.daily}
         assert {"skill:weekly-review", "skill:follow-up-nudges"} <= daily
-        assert "job_alerts_matches" in {j.name for j in scheduler.interval}
+        assert {"job_alerts_matches", "reminders"} <= {j.name for j in scheduler.interval}
         core = app.bot_data["core"]
         assert core.scan_runner is app.bot_data["scan_runner"]
         assert core.scan_runner.after is not None  # a scan's matches follow it
