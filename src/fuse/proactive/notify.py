@@ -9,6 +9,22 @@ from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 TELEGRAM_LIMIT = 4000
 
 
+def split_message(text: str, limit: int = TELEGRAM_LIMIT) -> list[str]:
+    """Split long text into Telegram-sized parts, at paragraph or line breaks if possible."""
+    parts, rest = [], text.strip()
+    while len(rest) > limit:
+        cut = rest.rfind("\n\n", 0, limit)
+        if cut < limit // 2:
+            cut = rest.rfind("\n", 0, limit)
+        if cut < limit // 2:
+            cut = limit
+        parts.append(rest[:cut].rstrip())
+        rest = rest[cut:].lstrip()
+    if rest:
+        parts.append(rest)
+    return parts or [""]
+
+
 @dataclass(frozen=True)
 class Button:
     label: str

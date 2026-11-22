@@ -44,7 +44,20 @@ def make_task_tools(tasks: TaskStore, max_attempts: int = 3) -> list[BaseTool]:
         """
         return await start_task(tasks, goal, max_attempts)
 
-    return [start_background_task]
+    @tool
+    async def check_task(task_id: int) -> str:
+        """The status and result of a background task, e.g. to follow up on "task 7"."""
+        task = await tasks.get(task_id)
+        if task is None:
+            return f"There is no task #{task_id}."
+        lines = [f"Task #{task.id}: {task.status}", f"Goal: {task.goal}"]
+        if task.result:
+            lines.append(f"Result:\n{task.result}")
+        if task.error:
+            lines.append(f"Problem: {task.error}")
+        return "\n".join(lines)
+
+    return [start_background_task, check_task]
 
 
 def make_progress_tool(

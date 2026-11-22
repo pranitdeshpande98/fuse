@@ -212,10 +212,15 @@ class Worker:
                 await asyncio.wait_for(stop.wait(), self.poll_seconds)
 
 
-def build_worker(settings, services, tasks: TaskStore, reporter: TaskReporter | None = None):
+def build_worker(settings, services, tasks: TaskStore, reporter=None) -> "Worker":
     """The worker as it runs in production: the full agent, with task limits."""
     from fuse.agent.factory import build_runner
     from fuse.agent.prompts import TASK_SYSTEM_PROMPT
+    from fuse.tasks.tools import make_progress_tool
+
+    async def send_progress(task_id: int, text: str) -> None:
+        if reporter is not None and hasattr(reporter, "progress"):
+            await reporter.progress(task_id, text)
 
     runner = build_runner(
         settings,
@@ -224,6 +229,7 @@ def build_worker(settings, services, tasks: TaskStore, reporter: TaskReporter | 
         services.google,
         services.drafts,
         services.memory,
+        extra_tools=[make_progress_tool(send_progress)],
         system_prompt=TASK_SYSTEM_PROMPT,
         max_steps=settings.task_max_steps,
     )
@@ -236,17 +242,24 @@ def build_worker(settings, services, tasks: TaskStore, reporter: TaskReporter | 
 
 
 async def _main() -> None:
+    from telegram import Bot
+
     from fuse.config import get_settings
+    from fuse.proactive.notify import TelegramNotifier
     from fuse.services import open_services
-    from fuse.tasks.queue import PostgresTaskStore
+    from fuse.tasks.report import TelegramTaskReporter
     from fuse.tracing import enable_tracing
 
     settings = get_settings()
     enable_tracing(settings)
-    async with open_services(settings) as services:
-        tasks = PostgresTaskStore(services.pool)
-        await tasks.ensure_schema()
-        worker = build_worker(settings, services, tasks)
+    token = settings.telegram_bot_token.get_secret_value()
+    if not token or not settings.telegram_allowed_chat_id:
+        raise SystemExit("Set TELEGRAM_BOT_TOKEN and TELEGRAM_ALLOWED_CHAT_ID in .env")
+    # The worker only *sends* Telegram messages. Receiving them (and your button taps)
+    # stays with the bot, which is the only process that polls Telegram.
+    async with Bot(token) as bot, open_services(settings) as services:
+        notifier = TelegramNotifier(bot, settings.telegram_allowed_chat_id)
+        worker = build_worker(settings, services, services.tasks, TelegramTaskReporter(notifier))
         await worker.run_forever()
 
 

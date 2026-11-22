@@ -41,6 +41,7 @@ from fuse.proactive.schedule import Scheduler, SystemClock, parse_hhmm
 from fuse.proactive.store import MuteStore, PostgresCursorStore, PostgresMuteStore
 from fuse.services import open_services
 from fuse.tasks.queue import TaskStore
+from fuse.tasks.report import cancel_text, tasks_text
 from fuse.tasks.tools import make_task_tools, start_task
 from fuse.tracing import enable_tracing
 
@@ -180,6 +181,18 @@ async def on_task(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     tasks: TaskStore = context.application.bot_data["tasks"]
     settings: Settings = context.application.bot_data["settings"]
     text = await start_task(tasks, " ".join(context.args or []), settings.task_max_attempts)
+    await update.effective_chat.send_message(text)  # type: ignore[union-attr]
+
+
+async def on_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/tasks: recent background tasks and where each one is."""
+    text = await tasks_text(context.application.bot_data["tasks"])
+    await update.effective_chat.send_message(text)  # type: ignore[union-attr]
+
+
+async def on_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/cancel <id>: stop a background task."""
+    text = await cancel_text(context.application.bot_data["tasks"], " ".join(context.args or []))
     await update.effective_chat.send_message(text)  # type: ignore[union-attr]
 
 
@@ -334,6 +347,8 @@ def build_application(settings: Settings) -> Application:
     app.add_handler(CommandHandler("memories", on_memories, filters=only_me))
     app.add_handler(CommandHandler("forget", on_forget, filters=only_me))
     app.add_handler(CommandHandler("task", on_task, filters=only_me))
+    app.add_handler(CommandHandler("tasks", on_tasks, filters=only_me))
+    app.add_handler(CommandHandler("cancel", on_cancel, filters=only_me))
     app.add_handler(CommandHandler("unmute", on_unmute, filters=only_me))
     app.add_handler(CallbackQueryHandler(on_button, pattern=r"^(approve|reject):"))
     app.add_handler(CallbackQueryHandler(on_alert_button, pattern=r"^ev:"))
