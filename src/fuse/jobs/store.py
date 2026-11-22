@@ -36,6 +36,8 @@ SCHEMA = [
     CREATE UNIQUE INDEX IF NOT EXISTS job_applications_company_role
         ON job_applications (lower(company), lower(role))
     """,
+    # Phase 6: the posting's link (e.g. from Job Alerts' Track button)
+    "ALTER TABLE job_applications ADD COLUMN IF NOT EXISTS url TEXT NOT NULL DEFAULT ''",
 ]
 
 
@@ -50,6 +52,7 @@ class Application:
     thread_id: str = ""
     notes: str = ""
     history: list[dict[str, str]] = field(default_factory=list)
+    url: str = ""
 
 
 def parse_day(value: str) -> date | None:
@@ -72,6 +75,7 @@ class JobStore(Protocol):
         next_step: str | None = None,
         thread_id: str | None = None,
         notes: str | None = None,
+        url: str | None = None,
     ) -> tuple[Application, bool]:
         """Insert or update by company + role. Returns (application, created)."""
         ...
@@ -99,10 +103,11 @@ def _app(row: dict[str, Any]) -> Application:
         thread_id=row["thread_id"],
         notes=row["notes"],
         history=row["history"],
+        url=row.get("url", ""),
     )
 
 
-COLUMNS = "id, company, role, stage, last_contact, next_step, thread_id, notes, history"
+COLUMNS = "id, company, role, stage, last_contact, next_step, thread_id, notes, history, url"
 
 
 class PostgresJobStore:
@@ -115,7 +120,15 @@ class PostgresJobStore:
                 await conn.execute(statement)
 
     async def save(
-        self, company, role, stage, last_contact=None, next_step=None, thread_id=None, notes=None
+        self,
+        company,
+        role,
+        stage,
+        last_contact=None,
+        next_step=None,
+        thread_id=None,
+        notes=None,
+        url=None,
     ) -> tuple[Application, bool]:
         company, role, stage = _check(company, role, stage)
         now = datetime.now(UTC).date().isoformat()
@@ -123,9 +136,10 @@ class PostgresJobStore:
             cur = await conn.execute(
                 f"""
                 INSERT INTO job_applications
-                    (company, role, stage, last_contact, next_step, thread_id, notes, history)
+                    (company, role, stage, last_contact, next_step, thread_id, notes, history,
+                     url)
                 VALUES (%s, %s, %s, %s, COALESCE(%s, ''), COALESCE(%s, ''), COALESCE(%s, ''),
-                        %s)
+                        %s, COALESCE(%s, ''))
                 ON CONFLICT (lower(company), lower(role)) DO UPDATE SET
                     history = CASE WHEN job_applications.stage <> EXCLUDED.stage
                         THEN job_applications.history || jsonb_build_object(
@@ -136,6 +150,7 @@ class PostgresJobStore:
                     next_step = COALESCE(%s, job_applications.next_step),
                     thread_id = COALESCE(NULLIF(%s, ''), job_applications.thread_id),
                     notes = COALESCE(%s, job_applications.notes),
+                    url = COALESCE(NULLIF(%s, ''), job_applications.url),
                     updated_at = now()
                 RETURNING {COLUMNS}, (xmax = 0) AS created
                 """,
@@ -148,10 +163,12 @@ class PostgresJobStore:
                     thread_id,
                     notes,
                     Jsonb([{"stage": stage, "on": now}]),
+                    url,
                     now,
                     next_step,
                     thread_id,
                     notes,
+                    url,
                 ),
             )
             row = await cur.fetchone()
@@ -177,7 +194,15 @@ class InMemoryJobStore:
         self.apps: list[Application] = []
 
     async def save(
-        self, company, role, stage, last_contact=None, next_step=None, thread_id=None, notes=None
+        self,
+        company,
+        role,
+        stage,
+        last_contact=None,
+        next_step=None,
+        thread_id=None,
+        notes=None,
+        url=None,
     ) -> tuple[Application, bool]:
         company, role, stage = _check(company, role, stage)
         today = datetime.now(UTC).date().isoformat()
@@ -190,6 +215,7 @@ class InMemoryJobStore:
                 app.next_step = app.next_step if next_step is None else next_step
                 app.thread_id = thread_id or app.thread_id
                 app.notes = app.notes if notes is None else notes
+                app.url = url or app.url
                 self.apps.remove(app)
                 self.apps.insert(0, app)
                 return replace(app), False
@@ -203,6 +229,7 @@ class InMemoryJobStore:
             thread_id or "",
             notes or "",
             [{"stage": stage, "on": today}],
+            url or "",
         )
         self.apps.insert(0, app)
         return replace(app), True

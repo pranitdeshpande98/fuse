@@ -126,3 +126,44 @@ async def test_scan_and_dashboard_commands():
     assert "2 of 3 portals active" in dashboard and "Duke" in dashboard
     fake.down = True
     assert "isn't running" in (await core.command(THREAD, "dashboard"))[0].text
+
+
+async def test_track_button_adds_a_job_match_to_your_applications():
+    from fuse.jobs.store import InMemoryJobStore
+
+    events, jobs = InMemoryEventStore(), InMemoryJobStore()
+    match = {
+        "job_key": "k1",
+        "company": "RAND",
+        "title": "SAP Analyst",
+        "location": "Santa Monica, CA",
+        "url": "https://rand.example/1",
+    }
+    event = await events.add("job", "job:k1", match)
+    core, *_ = make_core([], events=events, jobs=jobs)
+
+    result = await core.button(THREAD, f"jt:{event.id}")
+    assert result.toast == "Tracked" and result.only_this_button
+    assert "Added to your applications: RAND, SAP Analyst [interested]" in result.messages[0].text
+    (app,) = await jobs.list()
+    assert app.url == "https://rand.example/1" and "Santa Monica" in app.notes
+
+    again = await core.button(THREAD, f"jt:{event.id}")
+    assert "Already tracked" in again.messages[0].text and len(await jobs.list()) == 1
+    assert "can't find" in (await core.button(THREAD, "jt:999")).toast
+    email = await events.add("email", "gmail:1", {"from": "x"})
+    assert "can't find" in (await core.button(THREAD, f"jt:{email.id}")).toast
+
+
+def test_without_button_keeps_the_other_track_buttons():
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+    from fuse.channels.telegram_bot import without_button
+
+    markup = InlineKeyboardMarkup(
+        [[InlineKeyboardButton(f"Track {i}", callback_data=f"jt:{i}") for i in (1, 2, 3)]]
+    )
+    left = without_button(markup, "jt:2")
+    assert [b.callback_data for b in left.inline_keyboard[0]] == ["jt:1", "jt:3"]
+    single = InlineKeyboardMarkup([[InlineKeyboardButton("Track 1", callback_data="jt:1")]])
+    assert without_button(single, "jt:1") is None

@@ -14,7 +14,7 @@ from fuse.agent.runner import AgentReply, AgentRunner
 from fuse.approval_ui import after_allowing, approval_buttons, approval_text
 from fuse.contacts import ContactStore, contacts_text
 from fuse.jobalerts.client import JobAlertsClient, JobAlertsError
-from fuse.jobalerts.service import ScanRunner
+from fuse.jobalerts.service import TRACK_BUTTON, ScanRunner
 from fuse.jobalerts.tools import status_text
 from fuse.jobs.store import JobStore, jobs_text
 from fuse.memory.commands import forget_text, list_memories_text
@@ -53,6 +53,7 @@ class Outgoing:
 class ButtonResult:
     toast: str = ""  # a short confirmation shown where the button was
     buttons: Rows | None = None  # new buttons for that message; None removes them
+    only_this_button: bool = False  # remove just the tapped button, keep the others
     messages: list[Outgoing] = field(default_factory=list)
 
 
@@ -130,6 +131,8 @@ class ChatCore:
                 return await self._alert_button(thread_id, data)
             if data.startswith(f"{TASK_BUTTON}:"):
                 return await self._task_button(data)
+            if data.startswith(f"{TRACK_BUTTON}:"):
+                return await self._track_button(data)
             return await self._approval_button(thread_id, data)
         except Exception:
             log.exception("button failed")
@@ -171,6 +174,34 @@ class ChatCore:
             return ButtonResult(toast=text[:200], buttons=buttons)
         text = await decide_task_approval(self.tasks, data)
         return ButtonResult(toast=text[:200], messages=[Outgoing(text)])
+
+    async def _track_button(self, data: str) -> ButtonResult:
+        """Track on a Job Alerts match: add it to your applications as "interested"."""
+        raw_id = data.partition(":")[2]
+        if self.events is None or self.jobs is None or not raw_id.isdigit():
+            return ButtonResult(toast="That button isn't valid any more.")
+        event = await self.events.get(int(raw_id))
+        if event is None or event.kind != "job":
+            return ButtonResult(toast="I can't find that job any more.")
+        job = event.payload
+        try:
+            app, created = await self.jobs.save(
+                job.get("company") or "?",
+                job.get("title") or "?",
+                "interested",
+                notes=f"From Job Alerts ({job.get('location') or 'location not listed'})",
+                url=job.get("url", ""),
+            )
+        except ValueError as exc:
+            return ButtonResult(toast=str(exc)[:200], only_this_button=True)
+        if created:
+            text = (
+                f"Added to your applications: {app.company}, {app.role} [interested].\n"
+                "Tell me when you apply and I'll move it to applied. /jobs shows them all."
+            )
+        else:
+            text = f"Already tracked: {app.company}, {app.role} [{app.stage}]."
+        return ButtonResult(toast="Tracked", messages=[Outgoing(text)], only_this_button=True)
 
     # --- commands ----------------------------------------------------------------------
 

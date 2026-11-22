@@ -67,3 +67,9 @@ async def test_tools(jobs):
     listed = await tools["list_job_applications"].ainvoke({"stage": "applied"})
     assert "Acme: SWE II [applied], last contact 2026-11-10" in listed
     assert "Unknown stage" in await tools["list_job_applications"].ainvoke({"stage": "zzz"})
+
+
+async def test_url_is_kept_and_not_wiped_by_a_later_update(jobs):
+    await jobs.save("RAND", "SAP Analyst", "interested", url="https://rand.example/1")
+    app, _ = await jobs.save("RAND", "SAP Analyst", "applied")
+    assert app.url == "https://rand.example/1" and app.stage == "applied"
