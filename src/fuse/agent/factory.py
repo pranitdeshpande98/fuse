@@ -18,6 +18,7 @@ from fuse.memory.store import MemoryStore
 from fuse.memory.tools import make_memory_tools
 from fuse.tools.basic import make_basic_tools
 from fuse.tools.drafts import DraftSink, LocalDraftSink, make_draft_tools
+from fuse.tools.web import make_web_tools
 
 
 def build_tools(
@@ -32,6 +33,7 @@ def build_tools(
         *(make_google_tools(google) if google else []),
         *make_draft_tools(actions, drafts or LocalDraftSink()),
         *(make_memory_tools(memory, actions) if memory else []),
+        *(make_web_tools() if settings.web_search_enabled else []),
     ]
 
 

@@ -76,6 +76,9 @@ class Settings(BaseSettings):
         parse_hhmm(value)  # raises a clear error for anything that isn't HH:MM
         return value
 
+    # Web search (phase 4): DuckDuckGo, no API key.
+    web_search_enabled: bool = True
+
     # Background tasks (phase 4): limits for one task, run by `uv run fuse-worker`.
     task_max_steps: int = 40
     task_timeout_minutes: int = 15
